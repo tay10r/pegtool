@@ -1,15 +1,43 @@
 cmake_minimum_required(VERSION 3.9.6)
 
-project(ParsingExprGrammar)
+project(pegtool)
 
-find_package(GTest REQUIRED)
+option(PEGTOOL_TESTS "Whether or not to build the unit tests.")
 
-add_library(Peg Peg.h Peg.cpp)
+if(NOT MSVC)
+  set(cxxflags -Wall -Wextra -Werror -Wfatal-errors)
+endif(NOT MSVC)
 
-add_executable(PegTest PegTest.cpp)
+add_library(peg pegtool.h pegtool.cpp)
 
-target_link_libraries(PegTest PRIVATE Peg)
+target_compile_options(peg PRIVATE ${cxxflags})
 
-add_test(NAME PegTest COMMAND $<TARGET_FILE:PegTest>)
+target_include_directories(peg PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
-enable_testing()
+target_compile_features(peg PRIVATE cxx_std_11)
+
+if(PEGTOOL_TESTS)
+
+  add_executable(peg_test pegtool_test.cpp)
+
+  target_compile_options(peg_test PRIVATE ${cxxflags})
+
+  target_link_libraries(peg_test PRIVATE peg)
+
+  set(tests
+    invalid_def_name
+    missing_right_arrow
+    missing_expr_after_right_arrow
+    literal_expr)
+
+  foreach (test ${tests})
+
+    add_test(NAME PegTest:${test}
+      COMMAND $<TARGET_FILE:peg_test>
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests/${test}")
+
+  endforeach (test ${tests})
+
+  enable_testing()
+
+endif(PEGTOOL_TESTS)
