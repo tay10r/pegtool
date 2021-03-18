@@ -28,7 +28,9 @@ if(PEGTOOL_TESTS)
     invalid_def_name
     missing_right_arrow
     missing_expr_after_right_arrow
-    literal_expr)
+    literal_expr
+    literal_expr_missing_right_squote
+    literal_expr_missing_right_dquote)
 
   foreach (test ${tests})
 

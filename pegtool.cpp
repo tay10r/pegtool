@@ -683,10 +683,14 @@ public:
       return false;
     }
 
-    if (!parseExpr(def.expr)) {
-      formatErr(def.arrow, [](std::ostream& errStream) {
-        errStream << "Expected an expression after this.";
-      });
+    bool errFlag = false;
+
+    if (!parseExpr(def.expr, errFlag)) {
+      if (!errFlag) {
+        formatErr(def.arrow, [](std::ostream& errStream) {
+          errStream << "Expected an expression after this.";
+        });
+      }
       return false;
     }
 
@@ -733,7 +737,7 @@ private:
     return false;
   }
 
-  UniquePrimaryExprPtr parseLiteralExpr()
+  UniquePrimaryExprPtr parseLiteralExpr(bool& errFlag)
   {
     char first = this->cursor.peek(0);
 
@@ -758,39 +762,57 @@ private:
       return UniquePrimaryExprPtr(literalExpr.release());
     }
 
-    // TODO : Unterminated string error
+    Token leftQuoteChar;
+
+    produce(leftQuoteChar, 1);
+
+    formatErr(leftQuoteChar, [first](std::ostream& errStream) {
+      errStream << "Missing '";
+
+      if (first == '\'')
+        errStream << "\\'";
+      else
+        errStream << '"';
+
+      errStream << "'.";
+    });
+
+    errFlag = true;
 
     return nullptr;
   }
 
-  UniquePrimaryExprPtr parsePrimaryExpr()
+  UniquePrimaryExprPtr parsePrimaryExpr(bool& errFlag)
   {
-    auto literalExpr = parseLiteralExpr();
+    auto literalExpr = parseLiteralExpr(errFlag);
     if (literalExpr)
       return literalExpr;
 
+    if (errFlag)
+      return nullptr;
+
     return nullptr;
   }
 
-  bool parseSuffixExpr(SuffixExpr& suffixExpr)
+  bool parseSuffixExpr(SuffixExpr& suffixExpr, bool& errFlag)
   {
-    suffixExpr.primaryExpr = parsePrimaryExpr();
+    suffixExpr.primaryExpr = parsePrimaryExpr(errFlag);
 
     return !!suffixExpr.primaryExpr;
   }
 
-  bool parsePrefixExpr(PrefixExpr& prefixExpr)
+  bool parsePrefixExpr(PrefixExpr& prefixExpr, bool& errFlag)
   {
-    return parseSuffixExpr(prefixExpr.suffixExpr);
+    return parseSuffixExpr(prefixExpr.suffixExpr, errFlag);
   }
 
-  bool parseSequence(Sequence& sequence)
+  bool parseSequence(Sequence& sequence, bool& errFlag)
   {
     while (!this->cursor.atEnd()) {
 
       PrefixExpr prefixExpr;
 
-      if (parsePrefixExpr(prefixExpr))
+      if (parsePrefixExpr(prefixExpr, errFlag))
         sequence.prefixExprs.emplace_back(std::move(prefixExpr));
       else
         break;
@@ -799,9 +821,9 @@ private:
     return sequence.prefixExprs.size() > 0;
   }
 
-  bool parseExpr(Expr& expr)
+  bool parseExpr(Expr& expr, bool& errFlag)
   {
-    if (!parseSequence(expr.firstSequence))
+    if (!parseSequence(expr.firstSequence, errFlag))
       return false;
 
     return true;
