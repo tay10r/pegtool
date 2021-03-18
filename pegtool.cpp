@@ -448,6 +448,7 @@ class GroupExpr;
 class LiteralExpr;
 class ClassExpr;
 class DotExpr;
+class ReferenceExpr;
 
 class PrimaryExprVisitor
 {
@@ -457,6 +458,7 @@ public:
   virtual void visit(const LiteralExpr&) = 0;
   virtual void visit(const ClassExpr&) = 0;
   virtual void visit(const DotExpr&) = 0;
+  virtual void visit(const ReferenceExpr&) = 0;
 };
 
 class LiteralExpr final : public PrimaryExpr
@@ -471,6 +473,17 @@ private:
 
   LiteralExpr() = default;
 
+  Token token;
+};
+
+class ReferenceExpr final : public PrimaryExpr
+{
+public:
+  void accept(PrimaryExprVisitor& v) const override { v.visit(*this); }
+
+  std::string toString() const { return this->token.toString(); }
+
+private:
   Token token;
 };
 
@@ -1323,6 +1336,8 @@ private:
 
     this->insertInst(new ExpectInst(std::move(str)));
   }
+
+  void visit(const ReferenceExpr&) override {}
 
   void visit(const ClassExpr&) override {}
 
