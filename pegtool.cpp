@@ -507,6 +507,32 @@ Diagnostic::print(std::ostream& stream) const
 //================
 // }}} Diagnostics
 
+// {{{ Character Literals
+//=======================
+
+namespace {
+
+class CharLiteral final
+{
+public:
+  CharLiteral(const Token& t, std::string&& d)
+    : token(t)
+    , data(d)
+  {}
+
+private:
+  Token token;
+  /// The character literal data may not be the same as what's in the token
+  /// because of escape sequences. Short string optimization should prevent
+  /// anything from being allocated here.
+  std::string data;
+};
+
+} // namespace
+
+//=======================
+// }}} Character Literals
+
 // {{{ Expression Tree
 //====================
 
@@ -1264,18 +1290,46 @@ private:
     return false;
   }
 
+  bool parseCharLiteral(CharLiteral& literal)
+  {
+    (void)literal;
+    return false;
+#if 0
+    if (!this->cursor.atEnd() && this->cursor.peek(0) != '\\') {
+      literal.push_pack(this->cursor.peek(0));
+      return true;
+    }
+
+    if (this->cursor.peek(0) != '\\')
+      return false;
+
+    auto escapedChar = this->cursor.peek(1);
+
+    switch (escapedChar) {
+      case 'n':
+      case 'r':
+      case 't':
+      case '\'':
+      case '"':
+      case '[':
+      case ']':
+        break;
+    }
+#endif
+  }
+
   bool parseID(Token& token)
   {
-    auto c = cursor.peek(0);
+    auto c = this->cursor.peek(0);
 
     if (!isNonDigit(c))
       return false;
 
     size_t len = 1;
 
-    while (!cursor.outOfBounds(len)) {
+    while (!this->cursor.outOfBounds(len)) {
 
-      char c = cursor.peek(len);
+      char c = this->cursor.peek(len);
 
       if (isDigit(c) || isNonDigit(c))
         len++;
@@ -1283,7 +1337,7 @@ private:
         break;
     }
 
-    return produce(token, len);
+    return this->produce(token, len);
   }
 
   bool produce(Token& token, size_t len)
