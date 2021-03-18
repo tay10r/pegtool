@@ -131,7 +131,10 @@ public:
                                 size_t srcLen,
                                 size_t idx) noexcept
   {
-    for (size_t i = idx; (i > 0) && (i <= srcLen); i--) {
+    if (idx >= srcLen)
+      return src + srcLen;
+
+    for (size_t i = idx; i > 0; i--) {
       if (src[i - 1] == '\n')
         return src + i;
     }
@@ -143,9 +146,12 @@ public:
                                        size_t srcLen,
                                        size_t idx) noexcept
   {
-    for (size_t i = idx; (i > 0) && (i <= srcLen); i--) {
+    if (idx >= srcLen)
+      return srcLen;
+
+    for (size_t i = idx; i > 0; i--) {
       if (src[i - 1] == '\n')
-        return idx - i;
+        return i;
     }
 
     return 0;
@@ -354,6 +360,7 @@ namespace {
 /// grammar.
 enum class Severity
 {
+  Note,
   Warning,
   Error
 };
@@ -368,7 +375,8 @@ public:
   static Diagnostic make(const Token& tok,
                          const char* src,
                          size_t srcLen,
-                         Formatter formatter)
+                         Formatter formatter,
+                         Severity severity = Severity::Error)
   {
     std::ostringstream msgStream;
 
@@ -377,7 +385,7 @@ public:
     auto pos = tok.getPosition();
 
     Diagnostic diag;
-    diag.severity = Severity::Error;
+    diag.severity = severity;
     diag.start = pos;
     diag.msg = msgStream.str();
     diag.lnPtr = CharCursor::getLinePtr(src, srcLen, pos.idx);
@@ -420,6 +428,8 @@ const char*
 toString(Severity s)
 {
   switch (s) {
+    case Severity::Note:
+      return "note";
     case Severity::Warning:
       return "warning";
     case Severity::Error:
@@ -813,6 +823,8 @@ class Definition final
 public:
   std::string getName() const { return this->identifier.toString(); }
 
+  const Token& getIdentifierToken() const noexcept { return this->identifier; }
+
   bool hasName(const char* name) const { return identifier == name; }
 
   bool acceptExprVisitor(ExprVisitor& v) const { return v.visit(this->expr); }
@@ -1012,6 +1024,23 @@ public:
       return false;
     }
 
+    auto defName = def.getName();
+
+    const auto* existingDefTok = this->findExistingDefinition(defName.c_str());
+
+    if (existingDefTok) {
+
+      formatErr(def.identifier, [&defName](std::ostream& errStream) {
+        errStream << "'" << defName << "' is already defined.";
+      });
+
+      formatNote(*existingDefTok, [](std::ostream& errStream) {
+        errStream << "Previously defined here.";
+      });
+
+      return false;
+    }
+
     this->definitions.emplace_back(std::move(def));
 
     return true;
@@ -1032,6 +1061,16 @@ private:
 
   static bool isDigit(char c) { return inRange(c, '0', '9'); }
 
+  const Token* findExistingDefinition(const char* name) const
+  {
+    for (const auto& def : this->definitions) {
+      if (def.hasName(name))
+        return &def.getIdentifierToken();
+    }
+
+    return nullptr;
+  }
+
   template<typename Formatter>
   bool formatErr(const Token& tok, Formatter formatter)
   {
@@ -1039,6 +1078,20 @@ private:
                                  this->cursor.getStartingPtr(),
                                  this->cursor.getSourceLength(),
                                  formatter);
+
+    this->diagnostics.emplace_back(std::move(diag));
+
+    return false;
+  }
+
+  template<typename Formatter>
+  bool formatNote(const Token& tok, Formatter formatter)
+  {
+    auto diag = Diagnostic::make(tok,
+                                 this->cursor.getStartingPtr(),
+                                 this->cursor.getSourceLength(),
+                                 formatter,
+                                 Severity::Note);
 
     this->diagnostics.emplace_back(std::move(diag));
 

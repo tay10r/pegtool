@@ -1,0 +1,6 @@
+grammar.peg:3:1: error: 'Example' is already defined.
+ 3 | Example <- 'bar'
+   | ~~~~~~~
+grammar.peg:1:1: note: Previously defined here.
+ 1 | Example <- 'foo'
+   | ~~~~~~~
