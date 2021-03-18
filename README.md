@@ -5,27 +5,18 @@ pegtool
 
 A PEG parser generator for C++.
 
-Notable features:
-
- - linear, memory efficient parse tree
- - runtime generated parser VM
-
 ### API Usage
 
 ```cpp
 const char grammarSpec[] = R"(
-Example <- 'foo'
+Example <- Foo Bar
+Foo <- 'foo'
+Bar <- 'bar'
 )";
 
-peg::Grammar grammar;
+peg::Grammar grammar(grammarSpec);
 
-grammar.parse(grammarSpec);
+std::unique_ptr<peg::NonTerminal> root = grammar.parse("foobar");
 
-peg::Module module; // <- Stores code for the VM to execute.
-
-module.load(grammar); // <- Converts the grammar to bytecode.
-
-peg::ParseTree parseTree = module.exec("foo bar", sizeof("foo bar") - 1); // <- Invokes the VM.
-
-parseTree.print(parseTree.getRoot(), std::cout); // <- Recursively prints the resulting parse tree.
+root->print(std::cout);
 ```

@@ -1565,6 +1565,12 @@ private:
   std::vector<Diagnostic> diagnostics;
 };
 
+Grammar::Grammar(const char* grammarSpec)
+  : Grammar()
+{
+  load(grammarSpec, std::strlen(grammarSpec));
+}
+
 Grammar::Grammar(Grammar&& other) noexcept
   : implPtr(other.implPtr)
 {
@@ -1856,6 +1862,12 @@ Grammar::parse(const char* input, size_t length) const
   parser.parseRule(ruleIndex);
 
   return parser.popNonTerminal();
+}
+
+std::unique_ptr<NonTerminal>
+Grammar::parse(const char* input) const
+{
+  return Grammar::parse(input, std::strlen(input));
 }
 
 } // namespace peg

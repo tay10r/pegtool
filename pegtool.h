@@ -23,6 +23,13 @@ class Terminal;
 class Grammar final
 {
 public:
+  /// Constructs the grammar with a string literal that contains the PEG source
+  /// code.
+  ///
+  /// @param grammarSpec The string containing the definitions and parsing
+  /// expressions. This should be a null-terminated string.
+  Grammar(const char* grammarSpec);
+
   Grammar() = default;
 
   Grammar(Grammar&&) noexcept;
@@ -68,6 +75,8 @@ public:
   void load(const char* src);
 
   std::unique_ptr<NonTerminal> parse(const char* input, size_t length) const;
+
+  std::unique_ptr<NonTerminal> parse(const char* input) const;
 
 private:
   GrammarImpl* implPtr = nullptr;
