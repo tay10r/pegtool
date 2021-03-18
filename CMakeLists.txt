@@ -38,7 +38,9 @@ if(PEGTOOL_TESTS)
     reference_expr_unresolved
     duplicate_definition
     unused_definition
-    unused_definition_2)
+    unused_definition_2
+    dot_expr
+    dot_expr_2)
 
   foreach (test ${tests})
 

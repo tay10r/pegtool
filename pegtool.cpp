@@ -592,6 +592,21 @@ private:
   Token token;
 };
 
+class DotExpr final : public Expr
+{
+public:
+  DotExpr(const Token& t)
+    : dotToken(t)
+  {}
+
+  bool accept(ExprVisitor& v) const override { return v.visit(*this); }
+
+  bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
+
+private:
+  Token dotToken;
+};
+
 class ReferenceExpr final : public Expr
 {
 public:
@@ -1145,6 +1160,16 @@ private:
     return nullptr;
   }
 
+  UniqueExprPtr parseDotExpr()
+  {
+    Token dotToken;
+
+    if (!parseExactly(dotToken, "."))
+      return nullptr;
+
+    return UniqueExprPtr(new DotExpr(dotToken));
+  }
+
   UniqueExprPtr parseReferenceExpr()
   {
     auto cursorState = this->cursor.getState();
@@ -1176,6 +1201,10 @@ private:
     auto referenceExpr = parseReferenceExpr();
     if (referenceExpr)
       return referenceExpr;
+
+    auto dotExpr = parseDotExpr();
+    if (dotExpr)
+      return dotExpr;
 
     return nullptr;
   }
@@ -1715,7 +1744,15 @@ public:
 
   bool visit(const ClassExpr&) override { return false; }
 
-  bool visit(const DotExpr&) override { return false; }
+  bool visit(const DotExpr&) override
+  {
+    if (this->remaining() < 1)
+      return false;
+
+    this->produceTerm(1);
+
+    return true;
+  }
 
   bool visit(const ReferenceExpr& referenceExpr) override
   {
@@ -1825,6 +1862,11 @@ private:
       return this->input[absOffset] == c;
     else
       return false;
+  }
+
+  size_t remaining() const noexcept
+  {
+    return this->inputLength - this->inputOffset;
   }
 
   const GrammarImpl& grammar;
