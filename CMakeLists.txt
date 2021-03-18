@@ -29,8 +29,13 @@ if(PEGTOOL_TESTS)
     missing_right_arrow
     missing_expr_after_right_arrow
     literal_expr
+    literal_expr_2
     literal_expr_missing_right_squote
-    literal_expr_missing_right_dquote)
+    literal_expr_missing_right_dquote
+    sequence_expr
+    sequence_expr_2
+    reference_expr
+    reference_expr_unresolved)
 
   foreach (test ${tests})
 

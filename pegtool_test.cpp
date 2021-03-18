@@ -50,52 +50,23 @@ handleFailureTest(const peg::Grammar& grammar)
 }
 
 bool
-verifyBytecode(const peg::Grammar& grammar, const char* bytecodePath)
-{
-  peg::Module module;
-
-  module.load(grammar);
-
-  std::ostringstream modulePrintStream;
-
-  module.print(modulePrintStream);
-
-  auto moduleCode = modulePrintStream.str();
-
-  auto expectedModuleCode = readFile(bytecodePath);
-
-  if (moduleCode != expectedModuleCode) {
-    std::cerr << "Module code did not meet expectations" << std::endl;
-    std::cerr << std::endl;
-    std::cerr << "Expected vs. Actual:" << std::endl;
-    printStringComparison(expectedModuleCode, moduleCode);
-    return false;
-  }
-
-  return true;
-}
-
-bool
 verifyParserOutput(const peg::Grammar& grammar, const char* inputPath)
 {
-  peg::Module module;
-
-  module.load(grammar);
-
   auto input = readFile(inputPath);
 
-  auto parseTree = module.exec(input.c_str(), input.size());
+  auto root = grammar.parse(input.c_str(), input.size());
 
   std::ostringstream printStream;
 
-  parseTree.print(parseTree.getRoot(), printStream);
+  if (root)
+    root->print(printStream);
 
-  std::string expectedOut = readFile("expected_accept_output.txt");
+  std::string expectedOut = readFile("expected_output.txt");
 
   auto actualOut = printStream.str();
 
   if (expectedOut != actualOut) {
-    std::cerr << "Module did not print expected parse tree" << std::endl;
+    std::cerr << "Parser did not print expected parse tree" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Expected vs. Actual:" << std::endl;
     printStringComparison(expectedOut, actualOut);
@@ -127,7 +98,7 @@ main()
 
   peg::Grammar grammar;
 
-  grammar.parse(grammarStr.c_str(), grammarStr.size(), grammarPath);
+  grammar.load(grammarStr.c_str(), grammarStr.size(), grammarPath);
 
   if (fileExists("should_fail.txt"))
     return handleFailureTest(grammar) ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -137,13 +108,8 @@ main()
     return EXIT_FAILURE;
   }
 
-  if (fileExists("expected_bytecode.txt")) {
-    if (!verifyBytecode(grammar, "expected_bytecode.txt"))
-      return EXIT_FAILURE;
-  }
-
-  if (fileExists("accept.txt")) {
-    if (!verifyParserOutput(grammar, "accept.txt"))
+  if (fileExists("input.txt")) {
+    if (!verifyParserOutput(grammar, "input.txt"))
       return EXIT_FAILURE;
   }
 

@@ -127,6 +127,42 @@ namespace {
 class CharCursor final
 {
 public:
+  static const char* getLinePtr(const char* src,
+                                size_t srcLen,
+                                size_t idx) noexcept
+  {
+    for (size_t i = idx; (i > 0) && (i <= srcLen); i--) {
+      if (src[i - 1] == '\n')
+        return src + i;
+    }
+
+    return src;
+  }
+
+  static size_t getStartingIndexOfLine(const char* src,
+                                       size_t srcLen,
+                                       size_t idx) noexcept
+  {
+    for (size_t i = idx; (i > 0) && (i <= srcLen); i--) {
+      if (src[i - 1] == '\n')
+        return idx - i;
+    }
+
+    return 0;
+  }
+
+  static size_t getLineSize(const char* src,
+                            size_t srcLen,
+                            size_t lineOffset) noexcept
+  {
+    for (size_t i = lineOffset; i < srcLen; i++) {
+      if (src[i] == '\n')
+        return i - lineOffset;
+    }
+
+    return srcLen - lineOffset;
+  }
+
   CharCursor(const char* s, size_t len)
     : source(s)
     , charMax(len)
@@ -134,48 +170,13 @@ public:
 
   bool atEnd() const noexcept;
 
+  const char* getStartingPtr() const noexcept { return this->source; }
+
+  size_t getSourceLength() const noexcept { return this->charMax; }
+
   const char* getOffsetPtr() const noexcept
   {
     return this->source + this->charIdx;
-  }
-
-  const char* getLinePtr(size_t idx) const noexcept
-  {
-    for (size_t i = idx; (i > 0) && (i <= this->charIdx); i--) {
-
-      char c = this->source[i - 1];
-
-      if (c == '\n')
-        return this->source + i;
-    }
-
-    return this->source;
-  }
-
-  size_t getStartingIndexOfLine(size_t idx) const noexcept
-  {
-    for (size_t i = idx; (i > 0) && (i <= this->charIdx); i--) {
-
-      char c = this->source[i - 1];
-
-      if (c == '\n')
-        return idx - i;
-    }
-
-    return 0;
-  }
-
-  size_t getLineSize(size_t lineOffset) const noexcept
-  {
-    for (size_t i = lineOffset; i < this->charMax; i++) {
-
-      char c = this->source[i];
-
-      if (c == '\n')
-        return i - lineOffset;
-    }
-
-    return this->charMax - lineOffset;
   }
 
   size_t getLine() const noexcept { return this->ln; }
@@ -191,6 +192,29 @@ public:
   void next(size_t count) noexcept;
 
   void skipUnused();
+
+  struct State final
+  {
+    size_t idx = 0;
+    size_t ln = 0;
+    size_t col = 0;
+  };
+
+  State getState() const noexcept
+  {
+    State state;
+    state.idx = this->charIdx;
+    state.ln = this->ln;
+    state.col = this->col;
+    return state;
+  }
+
+  void restoreState(const State& state) noexcept
+  {
+    this->charIdx = state.idx;
+    this->ln = state.ln;
+    this->col = state.col;
+  }
 
 private:
   bool skipWS();
@@ -340,6 +364,30 @@ enum class Severity
 class Diagnostic final
 {
 public:
+  template<typename Formatter>
+  static Diagnostic make(const Token& tok,
+                         const char* src,
+                         size_t srcLen,
+                         Formatter formatter)
+  {
+    std::ostringstream msgStream;
+
+    formatter(static_cast<std::ostream&>(msgStream));
+
+    auto pos = tok.getPosition();
+
+    Diagnostic diag;
+    diag.severity = Severity::Error;
+    diag.start = pos;
+    diag.msg = msgStream.str();
+    diag.lnPtr = CharCursor::getLinePtr(src, srcLen, pos.idx);
+    diag.lnOffset = CharCursor::getStartingIndexOfLine(src, srcLen, pos.idx);
+    diag.lnSize = CharCursor::getLineSize(src, srcLen, diag.lnOffset);
+    diag.len = tok.getLength();
+
+    return diag;
+  }
+
   void print(std::ostream&) const;
 
   Position getStartPosition() const noexcept { return this->start; }
@@ -395,6 +443,26 @@ convertNumberToSpaces(size_t ln)
   return s;
 }
 
+class DiagnosticFactory final
+{
+public:
+  DiagnosticFactory(const char* s, size_t l)
+    : source(s)
+    , length(l)
+  {}
+
+  template<typename Formatter>
+  Diagnostic makeErr(const Token& tok, Formatter formatter) const
+  {
+    return Diagnostic::make(tok, source, length, formatter);
+  }
+
+private:
+  const char* source = nullptr;
+
+  size_t length = 0;
+};
+
 } // namespace
 
 void
@@ -432,41 +500,77 @@ Diagnostic::print(std::ostream& stream) const
 
 namespace {
 
-class PrimaryExprVisitor;
+class ExprVisitor;
+class ExprMutator;
 
-class PrimaryExpr
+class Expr
 {
 public:
-  virtual ~PrimaryExpr() = default;
+  virtual ~Expr() = default;
 
-  virtual void accept(PrimaryExprVisitor&) const = 0;
+  virtual bool accept(ExprVisitor&) const = 0;
+
+  virtual bool acceptMutator(const ExprMutator&) = 0;
 };
 
-using UniquePrimaryExprPtr = std::unique_ptr<PrimaryExpr>;
+using UniqueExprPtr = std::unique_ptr<Expr>;
 
 class GroupExpr;
 class LiteralExpr;
 class ClassExpr;
 class DotExpr;
+class PrefixExpr;
 class ReferenceExpr;
+class SlashExpr;
+class SuffixExpr;
+class Sequence;
 
-class PrimaryExprVisitor
+class ExprVisitor
 {
 public:
-  virtual ~PrimaryExprVisitor() = default;
-  virtual void visit(const GroupExpr&) = 0;
-  virtual void visit(const LiteralExpr&) = 0;
-  virtual void visit(const ClassExpr&) = 0;
-  virtual void visit(const DotExpr&) = 0;
-  virtual void visit(const ReferenceExpr&) = 0;
+  virtual ~ExprVisitor() = default;
+  virtual bool visit(const GroupExpr&) = 0;
+  virtual bool visit(const LiteralExpr&) = 0;
+  virtual bool visit(const ClassExpr&) = 0;
+  virtual bool visit(const DotExpr&) = 0;
+  virtual bool visit(const ReferenceExpr&) = 0;
+  virtual bool visit(const SlashExpr&) = 0;
+  virtual bool visit(const SuffixExpr&) = 0;
+  virtual bool visit(const PrefixExpr&) = 0;
+  virtual bool visit(const Sequence&) = 0;
 };
 
-class LiteralExpr final : public PrimaryExpr
+class ExprMutator
 {
 public:
-  void accept(PrimaryExprVisitor& v) const override;
+  virtual ~ExprMutator() = default;
+  virtual bool mutate(GroupExpr&) const = 0;
+  virtual bool mutate(LiteralExpr&) const = 0;
+  virtual bool mutate(ClassExpr&) const = 0;
+  virtual bool mutate(DotExpr&) const = 0;
+  virtual bool mutate(ReferenceExpr&) const = 0;
+  virtual bool mutate(SlashExpr&) const = 0;
+  virtual bool mutate(SuffixExpr&) const = 0;
+  virtual bool mutate(PrefixExpr&) const = 0;
+  virtual bool mutate(Sequence&) const = 0;
+};
 
-  std::string toString() const;
+class LiteralExpr final : public Expr
+{
+public:
+  bool accept(ExprVisitor& v) const override { return v.visit(*this); }
+
+  bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
+
+  std::string toString() const
+  {
+    std::string result;
+
+    for (size_t i = 2; i < this->token.getLength(); i++)
+      result.push_back(this->token[i - 1]);
+
+    return result;
+  }
 
 private:
   friend GrammarParser;
@@ -476,18 +580,37 @@ private:
   Token token;
 };
 
-class ReferenceExpr final : public PrimaryExpr
+class ReferenceExpr final : public Expr
 {
 public:
-  void accept(PrimaryExprVisitor& v) const override { v.visit(*this); }
+  ReferenceExpr(const Token& t)
+    : token(t)
+  {}
+
+  bool accept(ExprVisitor& v) const override { return v.visit(*this); }
+
+  bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
+
+  const Token& getToken() const noexcept { return this->token; }
+
+  size_t getRuleIndex() const noexcept { return this->ruleIndex; }
+
+  void setRuleIndex(size_t index) noexcept { this->ruleIndex = index; }
+
+  bool isResolved() const noexcept
+  {
+    return this->ruleIndex != std::numeric_limits<size_t>::max();
+  }
 
   std::string toString() const { return this->token.toString(); }
 
 private:
   Token token;
+
+  size_t ruleIndex = std::numeric_limits<size_t>::max();
 };
 
-class SuffixExpr final
+class SuffixExpr final : public Expr
 {
 public:
   enum class Kind
@@ -498,17 +621,37 @@ public:
     Plus
   };
 
-  void visitPrimaryExpr(PrimaryExprVisitor& v) const;
+  bool accept(ExprVisitor& v) const override { return v.visit(*this); }
+
+  bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
+
+  bool acceptPrimaryExprMutator(const ExprMutator& m)
+  {
+    if (this->primaryExpr)
+      return this->primaryExpr->acceptMutator(m);
+    else
+      return false;
+  }
+
+  bool acceptPrimaryExprVisitor(ExprVisitor& v) const
+  {
+    if (this->primaryExpr)
+      return this->primaryExpr->accept(v);
+    else
+      return false;
+  }
+
+  Kind getKind() const noexcept { return this->kind; }
 
 private:
   friend GrammarParser;
 
-  // Kind kind = Kind::None;
+  Kind kind = Kind::None;
 
-  UniquePrimaryExprPtr primaryExpr;
+  UniqueExprPtr primaryExpr;
 };
 
-class PrefixExpr final
+class PrefixExpr final : public Expr
 {
 public:
   enum class Kind
@@ -518,10 +661,18 @@ public:
     Not
   };
 
-  template<typename Visitor>
-  void visitSuffixExpr(Visitor v) const
+  bool accept(ExprVisitor& v) const override { return v.visit(*this); }
+
+  bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
+
+  bool acceptSuffixExprMutator(const ExprMutator& m)
   {
-    v(this->suffixExpr);
+    return m.mutate(this->suffixExpr);
+  }
+
+  bool acceptSuffixExprVisitor(ExprVisitor& v) const
+  {
+    return v.visit(this->suffixExpr);
   }
 
 private:
@@ -530,16 +681,33 @@ private:
   SuffixExpr suffixExpr;
 };
 
-class Sequence final
+class Sequence final : public Expr
 {
 public:
   size_t getPrefixExprCount() const noexcept;
 
-  template<typename Visitor>
-  void visitPrefixExprs(Visitor v) const
+  bool accept(ExprVisitor& v) const override { return v.visit(*this); }
+
+  bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
+
+  bool acceptPrefixExprMutator(const ExprMutator& m)
   {
+    auto success = true;
+
+    for (auto& prefixExpr : this->prefixExprs)
+      success &= m.mutate(prefixExpr);
+
+    return success;
+  }
+
+  bool acceptPrefixExprVisitor(ExprVisitor& v) const
+  {
+    auto success = true;
+
     for (const auto& prefixExpr : this->prefixExprs)
-      v(prefixExpr);
+      success &= v.visit(prefixExpr);
+
+    return success;
   }
 
 private:
@@ -548,20 +716,40 @@ private:
   std::vector<PrefixExpr> prefixExprs;
 };
 
-class Expr final
+class SlashExpr final : public Expr
 {
 public:
   using SlashSeqPair = std::pair<Token, Sequence>;
 
-  size_t getSequenceCount() const noexcept;
+  bool accept(ExprVisitor& v) const override { return v.visit(*this); }
 
-  template<typename Visitor>
-  void visitSequences(Visitor v) const
+  bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
+
+  size_t getSequenceCount() const noexcept
   {
-    v(firstSequence);
+    return 1 + otherSequenceExprs.size();
+  }
 
-    for (const auto& seq : this->otherSequenceExprs)
-      v(seq.second);
+  bool acceptSequenceMutator(size_t seqIndex, const ExprMutator& m)
+  {
+    if (seqIndex == 0)
+      return m.mutate(firstSequence);
+
+    if ((seqIndex - 1) < this->otherSequenceExprs.size())
+      return m.mutate(this->otherSequenceExprs[seqIndex - 1].second);
+
+    return false;
+  }
+
+  bool acceptSequenceVisitor(size_t seqIndex, ExprVisitor& v) const
+  {
+    if (seqIndex == 0)
+      return v.visit(firstSequence);
+
+    if ((seqIndex - 1) < this->otherSequenceExprs.size())
+      return v.visit(this->otherSequenceExprs[seqIndex - 1].second);
+
+    return false;
   }
 
 private:
@@ -572,36 +760,43 @@ private:
   std::vector<SlashSeqPair> otherSequenceExprs;
 };
 
-void
-LiteralExpr::accept(PrimaryExprVisitor& v) const
+class RecursiveExprVisitor : public ExprVisitor
 {
-  v.visit(*this);
-}
+public:
+  virtual ~RecursiveExprVisitor() = default;
+  virtual bool visit(const GroupExpr&) override { return true; }
+  virtual bool visit(const LiteralExpr&) override { return true; }
+  virtual bool visit(const ClassExpr&) override { return true; }
+  virtual bool visit(const DotExpr&) override { return true; }
+  virtual bool visit(const ReferenceExpr&) override { return true; }
 
-std::string
-LiteralExpr::toString() const
-{
-  std::string result;
+  virtual bool visit(const SlashExpr& slashExpr) override
+  {
+    size_t seqCount = slashExpr.getSequenceCount();
 
-  for (size_t i = 2; i < this->token.getLength(); i++) {
-    result.push_back(this->token[i - 1]);
+    auto success = true;
+
+    for (size_t i = 0; i < seqCount; i++)
+      success &= slashExpr.acceptSequenceVisitor(i, *this);
+
+    return true;
   }
 
-  return result;
-}
+  virtual bool visit(const SuffixExpr& suffixExpr) override
+  {
+    return suffixExpr.acceptPrimaryExprVisitor(*this);
+  }
 
-size_t
-Expr::getSequenceCount() const noexcept
-{
-  return 1 + otherSequenceExprs.size();
-}
+  virtual bool visit(const PrefixExpr& prefixExpr) override
+  {
+    return prefixExpr.acceptSuffixExprVisitor(*this);
+  }
 
-void
-SuffixExpr::visitPrimaryExpr(PrimaryExprVisitor& v) const
-{
-  if (this->primaryExpr)
-    this->primaryExpr->accept(v);
-}
+  virtual bool visit(const Sequence& sequenceExpr) override
+  {
+    return sequenceExpr.acceptPrefixExprVisitor(*this);
+  }
+};
 
 } // namespace
 
@@ -620,11 +815,9 @@ public:
 
   bool hasName(const char* name) const { return identifier == name; }
 
-  template<typename Visitor>
-  void visitExpr(Visitor v) const
-  {
-    v(this->expr);
-  }
+  bool acceptExprVisitor(ExprVisitor& v) const { return v.visit(this->expr); }
+
+  bool acceptExprMutator(const ExprMutator& m) { return m.mutate(this->expr); }
 
 private:
   friend GrammarParser;
@@ -635,13 +828,125 @@ private:
 
   Token arrow;
 
-  Expr expr;
+  SlashExpr expr;
 };
 
 } // namespace
 
 //===============
 // }}} Definition
+
+// {{{ Parse Tree Printer
+//=======================
+
+namespace {
+
+class ParseTreePrinter final : public SymbolVisitor
+{
+public:
+  ParseTreePrinter(std::ostream& s)
+    : stream(s)
+  {}
+
+  void visit(const Terminal& term) override
+  {
+    this->indent() << '\'';
+
+    const char* data = term.getData();
+
+    for (size_t i = 0; i < term.getLength(); i++)
+      this->stream << data[i];
+
+    this->stream << '\'' << std::endl;
+  }
+
+  void visit(const NonTerminal& nonTerm) override
+  {
+    this->indent() << nonTerm.getName() << ':' << std::endl;
+
+    this->indentLevel++;
+
+    if (nonTerm.getChildrenCount() == 0)
+      this->indent() << "(empty)" << std::endl;
+    else
+      nonTerm.acceptChildrenVisitor(*this);
+
+    this->indentLevel--;
+  }
+
+private:
+  auto indent() -> std::ostream&
+  {
+    for (size_t i = 0; i < this->indentLevel; i++)
+      this->stream << "  ";
+
+    return this->stream;
+  }
+
+  std::ostream& stream;
+
+  size_t indentLevel = 0;
+};
+
+} // namespace
+
+//=====================
+// }}} ParseTreePrinter
+
+// {{{ Symbols
+//============
+
+namespace {
+
+class NonTerminalImpl final : public NonTerminal
+{
+public:
+  NonTerminalImpl(std::string&& n)
+    : name(std::move(n))
+  {}
+
+  void acceptChildrenVisitor(SymbolVisitor& v) const override
+  {
+    for (const auto& child : this->children)
+      child->accept(v);
+  }
+
+  void appendChild(Symbol* s) { this->children.emplace_back(s); }
+
+  void appendChild(std::unique_ptr<NonTerminalImpl>&& child)
+  {
+    this->children.emplace_back(std::unique_ptr<Symbol>(child.release()));
+  }
+
+  const char* getName() const noexcept override { return this->name.c_str(); }
+
+  bool hasName(const char* n) const noexcept override
+  {
+    return this->name == n;
+  }
+
+  size_t getChildrenCount() const noexcept override
+  {
+    return this->children.size();
+  }
+
+private:
+  std::string name;
+  std::vector<std::unique_ptr<Symbol>> children;
+};
+
+} // namespace
+
+void
+NonTerminal::print(std::ostream& stream) const
+{
+  ParseTreePrinter printer(stream);
+
+  printer.visit(*this);
+}
+
+//============
+// }}} Symbols
 
 // {{{ Grammar Parsing
 //====================
@@ -730,27 +1035,17 @@ private:
   template<typename Formatter>
   bool formatErr(const Token& tok, Formatter formatter)
   {
-    std::ostringstream msgStream;
-
-    formatter(static_cast<std::ostream&>(msgStream));
-
-    auto pos = tok.getPosition();
-
-    Diag diag;
-    diag.severity = Severity::Error;
-    diag.start = pos;
-    diag.msg = msgStream.str();
-    diag.lnPtr = this->cursor.getLinePtr(pos.idx);
-    diag.lnOffset = this->cursor.getStartingIndexOfLine(pos.idx);
-    diag.lnSize = this->cursor.getLineSize(diag.lnOffset);
-    diag.len = tok.getLength();
+    auto diag = Diagnostic::make(tok,
+                                 this->cursor.getStartingPtr(),
+                                 this->cursor.getSourceLength(),
+                                 formatter);
 
     this->diagnostics.emplace_back(std::move(diag));
 
     return false;
   }
 
-  UniquePrimaryExprPtr parseLiteralExpr(bool& errFlag)
+  UniqueExprPtr parseLiteralExpr(bool& errFlag)
   {
     char first = this->cursor.peek(0);
 
@@ -772,7 +1067,7 @@ private:
 
       produce(literalExpr->token, len + 1);
 
-      return UniquePrimaryExprPtr(literalExpr.release());
+      return UniqueExprPtr(literalExpr.release());
     }
 
     Token leftQuoteChar;
@@ -795,7 +1090,26 @@ private:
     return nullptr;
   }
 
-  UniquePrimaryExprPtr parsePrimaryExpr(bool& errFlag)
+  UniqueExprPtr parseReferenceExpr()
+  {
+    auto cursorState = this->cursor.getState();
+
+    Token token;
+
+    if (!this->parseID(token))
+      return nullptr;
+
+    Token arrow;
+
+    if (this->parseExactly(arrow, "<-")) {
+      this->cursor.restoreState(cursorState);
+      return nullptr;
+    }
+
+    return UniqueExprPtr(new ReferenceExpr(token));
+  }
+
+  UniqueExprPtr parsePrimaryExpr(bool& errFlag)
   {
     auto literalExpr = parseLiteralExpr(errFlag);
     if (literalExpr)
@@ -803,6 +1117,10 @@ private:
 
     if (errFlag)
       return nullptr;
+
+    auto referenceExpr = parseReferenceExpr();
+    if (referenceExpr)
+      return referenceExpr;
 
     return nullptr;
   }
@@ -834,7 +1152,7 @@ private:
     return sequence.prefixExprs.size() > 0;
   }
 
-  bool parseExpr(Expr& expr, bool& errFlag)
+  bool parseExpr(SlashExpr& expr, bool& errFlag)
   {
     if (!parseSequence(expr.firstSequence, errFlag))
       return false;
@@ -916,6 +1234,120 @@ private:
 //====================
 // }}} Grammar Parsing
 
+// {{{ Symbol Resolution
+//======================
+
+namespace {
+
+class SymbolResolver final : public ExprMutator
+{
+public:
+  SymbolResolver(std::vector<std::string> names)
+    : ruleNames(std::move(names))
+  {}
+
+  bool mutate(GroupExpr&) const override { return true; }
+
+  bool mutate(LiteralExpr&) const override { return true; }
+
+  bool mutate(ClassExpr&) const override { return true; }
+
+  bool mutate(DotExpr&) const override { return true; }
+
+  bool mutate(ReferenceExpr& referenceExpr) const override
+  {
+    auto tok = referenceExpr.getToken();
+
+    auto index = this->findRule(tok);
+
+    referenceExpr.setRuleIndex(index);
+
+    return true;
+  }
+
+  bool mutate(SlashExpr& slashExpr) const override
+  {
+    auto success = true;
+
+    for (size_t i = 0; i < slashExpr.getSequenceCount(); i++)
+      success &= slashExpr.acceptSequenceMutator(i, *this);
+
+    return success;
+  }
+
+  bool mutate(SuffixExpr& suffixExpr) const override
+  {
+    return suffixExpr.acceptPrimaryExprMutator(*this);
+  }
+
+  bool mutate(PrefixExpr& prefixExpr) const override
+  {
+    return prefixExpr.acceptSuffixExprMutator(*this);
+  }
+
+  bool mutate(Sequence& sequence) const override
+  {
+    return sequence.acceptPrefixExprMutator(*this);
+  }
+
+private:
+  size_t findRule(const Token& nameTok) const
+  {
+    auto name = nameTok.toString();
+
+    for (size_t i = 0; i < ruleNames.size(); i++) {
+      if (ruleNames[i] == name)
+        return i;
+    }
+
+    return std::numeric_limits<size_t>::max();
+  }
+
+  std::vector<std::string> ruleNames;
+};
+
+class SymbolResolutionChecker final : public RecursiveExprVisitor
+{
+public:
+  SymbolResolutionChecker(const char* s, size_t l)
+    : diagFactory(s, l)
+  {}
+
+  std::vector<Diagnostic> getDiagnostics()
+  {
+    return std::move(this->diagnostics);
+  }
+
+  bool visit(const ReferenceExpr& referenceExpr) override
+  {
+    auto tok = referenceExpr.getToken();
+
+    auto index = referenceExpr.getRuleIndex();
+
+    if (index == std::numeric_limits<size_t>::max()) {
+      auto diag = diagFactory.makeErr(tok, [](std::ostream& errStream) {
+        errStream << "Definition for this is missing.";
+      });
+
+      this->diagnostics.emplace_back(diag);
+
+      return false;
+    }
+
+    return true;
+  }
+
+private:
+  DiagnosticFactory diagFactory;
+
+  std::vector<Diagnostic> diagnostics;
+};
+
+} // namespace
+
+//======================
+// }}} Symbol Resolution
+
 // {{{ Grammar
 //============
 
@@ -937,14 +1369,53 @@ public:
     return this->definitions[0].getName();
   }
 
-  const Definition* findDef(const char* name) const
+  std::vector<std::string> getRuleNames() const
   {
-    for (const auto& def : this->definitions) {
-      if (def.hasName(name))
-        return &def;
+    std::vector<std::string> names;
+
+    for (const auto& def : this->definitions)
+      names.emplace_back(def.getName());
+
+    return names;
+  }
+
+  const Definition* getDefinition(size_t index) const
+  {
+    if (index < this->definitions.size())
+      return &this->definitions[index];
+    else
+      return nullptr;
+  }
+
+  size_t findDefinitionIndex(const char* name) const
+  {
+    for (size_t i = 0; i < this->definitions.size(); i++) {
+      if (this->definitions[i].hasName(name))
+        return i;
     }
 
-    return nullptr;
+    return std::numeric_limits<size_t>::max();
+  }
+
+  void resolveSymbols()
+  {
+    SymbolResolver symResolver(this->getRuleNames());
+
+    for (auto& def : this->definitions)
+      def.acceptExprMutator(symResolver);
+  }
+
+  void checkSymbolResolution(const char* source, size_t sourceLen)
+  {
+    SymbolResolutionChecker checker(source, sourceLen);
+
+    for (auto& def : this->definitions)
+      def.acceptExprVisitor(checker);
+
+    auto diags = checker.getDiagnostics();
+
+    for (auto& diag : diags)
+      this->diagnostics.emplace_back(std::move(diag));
   }
 
 private:
@@ -1012,7 +1483,7 @@ Grammar::printDiagnostics(std::ostream& stream) const
 }
 
 void
-Grammar::parse(const char* src, size_t len, const char* name)
+Grammar::load(const char* src, size_t len, const char* name)
 {
   auto& implRef = this->getImpl();
 
@@ -1029,805 +1500,229 @@ Grammar::parse(const char* src, size_t len, const char* name)
   implRef.definitions = parser.getDefinitions();
 
   implRef.diagnostics = parser.getDiagnostics();
+
+  implRef.resolveSymbols();
+
+  implRef.checkSymbolResolution(src, len);
 }
 
 void
-Grammar::parse(const char* s)
+Grammar::load(const char* s)
 {
-  this->parse(s, std::strlen(s));
+  this->load(s, std::strlen(s));
 }
 
 //============
 // }}} Grammar
 
-// {{{ Bytecode
-//=============
-
-namespace {
-
-class RetInst;
-class ExpectInst;
-class ProduceTermInst;
-
-class InstVisitor
-{
-public:
-  virtual ~InstVisitor() = default;
-
-  virtual void visit(const RetInst&) = 0;
-
-  virtual void visit(const ExpectInst&) = 0;
-
-  virtual void visit(const ProduceTermInst&) = 0;
-};
-
-class Inst
-{
-public:
-  virtual ~Inst() = default;
-
-  virtual void accept(InstVisitor&) const = 0;
-};
-
-using UniqueInstPtr = std::unique_ptr<Inst>;
-
-class ExpectInst final : public Inst
-{
-public:
-  ExpectInst(std::string e) noexcept
-    : expected(std::move(e))
-  {}
-
-  void accept(InstVisitor& v) const override { v.visit(*this); }
-
-  const std::string& getExpected() const noexcept { return this->expected; }
-
-private:
-  std::string expected;
-};
-
-class RetInst final : public Inst
-{
-public:
-  void accept(InstVisitor& v) const override { v.visit(*this); }
-};
-
-class ProduceTermInst final : public Inst
-{
-public:
-  void accept(InstVisitor& v) const override { v.visit(*this); }
-};
-
-} // namespace
-
-//=============
-// }}} Bytecode
-
-// {{{ Inst Printer
-//===================
-
-namespace {
-
-class InstPrinter final : public InstVisitor
-{
-public:
-  InstPrinter(std::ostream& s, size_t maxInstOffset)
-    : stream(s)
-    , maxOffsetChars(getRequiredDecChars(maxInstOffset))
-  {}
-
-  void visit(const ExpectInst& expectInst) override
-  {
-    this->printPrefix("expect");
-    this->stream << " '" << expectInst.getExpected() << "'";
-    this->stream << std::endl;
-  }
-
-  void visit(const RetInst&) override { this->printPrefix("ret") << std::endl; }
-
-  void visit(const ProduceTermInst&) override
-  {
-    this->printPrefix("produce_term") << std::endl;
-  }
-
-  void printLabel(const char* label)
-  {
-    this->stream << label << ':' << std::endl;
-  }
-
-  void nextOffset() noexcept { this->instOffset++; }
-
-private:
-  std::ostream& printPrefix(const char* inst)
-  {
-    this->stream << "  " << std::setfill('0') << std::setw(maxOffsetChars)
-                 << std::right << std::hex << this->instOffset;
-
-    this->stream << "  " << inst;
-
-    return this->stream;
-  }
-
-  static size_t getRequiredDecChars(size_t n) noexcept
-  {
-    if (n < 10)
-      return 1;
-    else if (n < 100)
-      return 2;
-    else if (n < 1000)
-      return 3;
-    else if (n < 10000)
-      return 4;
-    else if (n < 100000)
-      return 5;
-
-    return 8;
-  }
-
-  std::ostream& stream;
-
-  size_t instOffset = 0;
-
-  size_t maxOffsetChars = 4;
-};
-
-} // namespace
-
-//===================
-// }}} Inst Printer
-
-// {{{ Module
+// {{{ Parser
 //===========
 
-namespace {
-
-class ModuleBuilder;
-
-} // namespace
-
-class ModuleImpl final
-{
-  friend Module;
-
-  friend ModuleBuilder;
-
-  /// Used to associate bytecode addresses to the rules that they originated
-  /// from.
-  std::map<size_t, std::string> ruleMap;
-
-  std::vector<UniqueInstPtr> code;
-
-public:
-  const char* findLabelAt(size_t offset) const
-  {
-    auto it = this->ruleMap.find(offset);
-
-    if (it != this->ruleMap.end())
-      return it->second.c_str();
-
-    return nullptr;
-  }
-};
-
-Module::Module(Module&& other) noexcept
-  : implPtr(other.implPtr)
-{
-  other.implPtr = nullptr;
-}
-
-Module::~Module()
-{
-  delete this->implPtr;
-}
-
-void
-Module::print(std::ostream& stream) const
-{
-  if (!this->implPtr)
-    return;
-
-  InstPrinter instPrinter(stream, this->implPtr->code.size());
-
-  for (size_t i = 0; i < this->implPtr->code.size(); i++) {
-
-    const auto& inst = this->implPtr->code[i];
-
-    const char* label = this->implPtr->findLabelAt(i);
-    if (label)
-      instPrinter.printLabel(label);
-
-    inst->accept(instPrinter);
-
-    instPrinter.nextOffset();
-  }
-}
-
-ModuleImpl&
-Module::getImpl()
-{
-  if (!this->implPtr)
-    this->implPtr = new ModuleImpl();
-
-  return *this->implPtr;
-}
-
-//===========
-// }}} Module
-
-// {{{ Module Builder
-//==================
-
-namespace {
-
-class ModuleBuilder final : public PrimaryExprVisitor
+class Parser final : public ExprVisitor
 {
 public:
-  ModuleBuilder(const GrammarImpl& g, ModuleImpl& m)
+  Parser(const GrammarImpl& g, const char* str, size_t len)
     : grammar(g)
-    , module(m)
+    , input(str)
+    , inputLength(len)
   {}
 
-  bool buildRule(const std::string& name)
+  std::unique_ptr<NonTerminalImpl> popNonTerminal()
   {
-    const auto* def = this->grammar.findDef(name.c_str());
+    if (this->nonTerminalStack.size() == 0)
+      return nullptr;
 
-    if (def)
-      return this->buildRule(*def);
-    else
-      return false;
+    auto nonTerm = std::move(this->nonTerminalStack.back());
+
+    this->nonTerminalStack.pop_back();
+
+    return nonTerm;
   }
 
-private:
-  bool buildRule(const Definition& def)
+  bool parseRule(size_t defIndex)
   {
-    this->module.ruleMap.emplace(this->module.code.size(), def.getName());
+    const auto* def = this->grammar.getDefinition(defIndex);
+    if (!def)
+      return false;
 
-    auto exprVisitor = [this](const Expr& expr) { this->buildExpr(expr); };
+    this->beginNonTerm(def->getName());
 
-    def.visitExpr(exprVisitor);
+    if (!def->acceptExprVisitor(*this)) {
+      this->abortNonTerm();
+      return false;
+    }
 
-    this->insertInst(new ProduceTermInst());
-
-    this->insertInst(new RetInst());
+    this->completeNonTerm();
 
     return true;
   }
 
-  void buildExpr(const Expr& expr)
+  bool visit(const GroupExpr&) override { return false; }
+
+  bool visit(const LiteralExpr& literalExpr) override
   {
-    if (expr.getSequenceCount() == 1) {
-      auto seqVisitor = [this](const Sequence& seq) {
-        this->buildSequence(seq);
-      };
-      expr.visitSequences(seqVisitor);
-    } else {
-      // TODO
+    // TODO : Do not dynamically allocate this.
+    auto data = literalExpr.toString();
+
+    for (size_t i = 0; i < data.size(); i++) {
+      if (!this->equalAt(i, data[i]))
+        return false;
     }
+
+    this->produceTerm(data.size());
+
+    return true;
   }
 
-  void buildSequence(const Sequence& seq)
+  bool visit(const ClassExpr&) override { return false; }
+
+  bool visit(const DotExpr&) override { return false; }
+
+  bool visit(const ReferenceExpr& referenceExpr) override
   {
-    auto seqVisitor = [this](const PrefixExpr& prefixExpr) {
-      this->buildPrefixExpr(prefixExpr);
-    };
-
-    seq.visitPrefixExprs(seqVisitor);
+    return parseRule(referenceExpr.getRuleIndex());
   }
 
-  void buildPrefixExpr(const PrefixExpr& prefixExpr)
+  bool visit(const SlashExpr& slashExpr) override
   {
-    auto suffixExprVisitor = [this](const SuffixExpr& suffixExpr) {
-      this->buildSuffixExpr(suffixExpr);
-    };
-
-    prefixExpr.visitSuffixExpr(suffixExprVisitor);
+    return slashExpr.acceptSequenceVisitor(0, *this);
   }
 
-  void buildSuffixExpr(const SuffixExpr& suffixExpr)
+  bool visit(const SuffixExpr& suffixExpr) override
   {
-    suffixExpr.visitPrimaryExpr(*this);
+    return suffixExpr.acceptPrimaryExprVisitor(*this);
   }
 
-  void visit(const GroupExpr&) override {}
-
-  void visit(const LiteralExpr& literalExpr) override
+  bool visit(const PrefixExpr& prefixExpr) override
   {
-    auto str = literalExpr.toString();
-
-    this->insertInst(new ExpectInst(std::move(str)));
+    return prefixExpr.acceptSuffixExprVisitor(*this);
   }
 
-  void visit(const ReferenceExpr&) override {}
+  bool visit(const Sequence& sequenceExpr) override
+  {
+    return sequenceExpr.acceptPrefixExprVisitor(*this);
+  }
 
-  void visit(const ClassExpr&) override {}
+private:
+  void beginNonTerm(std::string ruleName)
+  {
+    this->pushState();
 
-  void visit(const DotExpr&) override {}
+    this->nonTerminalStack.emplace_back(
+      new NonTerminalImpl(std::move(ruleName)));
+  }
 
-  void insertInst(Inst* inst) { this->module.code.emplace_back(inst); }
+  void abortNonTerm() { this->restoreLastState(); }
+
+  void completeNonTerm()
+  {
+    this->discardLastState();
+
+    if (this->nonTerminalStack.size() <= 1)
+      return;
+
+    auto& dst = this->nonTerminalStack[this->nonTerminalStack.size() - 2];
+
+    auto& src = this->nonTerminalStack[this->nonTerminalStack.size() - 1];
+
+    dst->appendChild(std::move(src));
+
+    this->nonTerminalStack.pop_back();
+  }
+
+  void pushState()
+  {
+    State state;
+    state.inputOffset = this->inputOffset;
+    state.nonTerminalCount = this->nonTerminalStack.size();
+    this->stateStack.push_back(state);
+  }
+
+  void restoreLastState()
+  {
+    assert(this->stateStack.size() > 0);
+
+    auto state = this->stateStack.back();
+
+    this->stateStack.pop_back();
+
+    this->inputOffset = state.inputOffset;
+
+    this->nonTerminalStack.resize(state.nonTerminalCount);
+  }
+
+  void discardLastState()
+  {
+    assert(this->stateStack.size() > 0);
+
+    this->stateStack.pop_back();
+  }
+
+  NonTerminalImpl& getCurrentNonTerm()
+  {
+    assert(this->nonTerminalStack.size() > 0);
+
+    return *this->nonTerminalStack.back();
+  }
+
+  void produceTerm(size_t length)
+  {
+    Terminal term(this->input + this->inputOffset, length);
+
+    auto& parentNonTerm = this->getCurrentNonTerm();
+
+    const char* termPtr = this->input + this->inputOffset;
+
+    parentNonTerm.appendChild(new Terminal(termPtr, length));
+
+    this->inputOffset += length;
+  }
+
+  bool equalAt(size_t relOffset, char c)
+  {
+    size_t absOffset = this->inputOffset + relOffset;
+
+    if (absOffset < this->inputLength)
+      return this->input[absOffset] == c;
+    else
+      return false;
+  }
 
   const GrammarImpl& grammar;
 
-  ModuleImpl& module;
-};
+  const char* input = nullptr;
+  size_t inputLength = 0;
+  size_t inputOffset = 0;
 
-} // namespace
-
-//==================
-// }}} Module Builder
-
-bool
-Module::load(const Grammar& grammar)
-{
-  if (!grammar.implPtr)
-    return false;
-
-  ModuleBuilder moduleBuilder(*grammar.implPtr, getImpl());
-
-  auto startRule = grammar.implPtr->getStartRuleName();
-
-  moduleBuilder.buildRule(startRule);
-
-  return true;
-}
-
-// {{{ Parse Tree Printer
-//=======================
-
-namespace {
-
-class ParseTreePrinter final : public SymbolVisitor
-{
-public:
-  ParseTreePrinter(std::ostream& s)
-    : stream(s)
-  {}
-
-  void visit(const ParseTree& parseTree, const Terminal& term) override
+  struct State final
   {
-    this->indent() << '\'';
-
-    const char* data = parseTree.getCharData(term);
-
-    for (size_t i = 0; i < term.getLength(); i++)
-      this->stream << data[i];
-
-    this->stream << '\'' << std::endl;
-  }
-
-  void visit(const ParseTree& parseTree, const NonTerminal& nonTerm) override
-  {
-    this->indent() << parseTree.getName(nonTerm) << ':' << std::endl;
-
-    this->indentLevel++;
-
-    if (nonTerm.getChildrenCount() == 0)
-      this->indent() << "(empty)" << std::endl;
-    else
-      parseTree.visitChildren(nonTerm, *this);
-
-    this->indentLevel--;
-  }
-
-private:
-  auto indent() -> std::ostream&
-  {
-    for (size_t i = 0; i < this->indentLevel; i++)
-      this->stream << "  ";
-
-    return this->stream;
-  }
-
-  std::ostream& stream;
-
-  size_t indentLevel = 0;
-};
-
-} // namespace
-
-//=====================
-// }}} ParseTreePrinter
-
-// {{{ Parse Tree
-//===============
-
-namespace {
-
-const NonTerminal&
-nullNonTerm() noexcept
-{
-  static NonTerminal nonTerm;
-  return nonTerm;
-}
-
-} // namespace
-
-class ParseTreeImpl final
-{
-public:
-  struct SymbolIndex final
-  {
-    /// Indicates what array the index belongs to.
-    bool isTerminal : 1;
-
-    /// This is either the index within the terminal array or the index within
-    /// the non-terminal array.
-    size_t index : (sizeof(size_t) * 8) - 1;
+    size_t inputOffset = 0;
+    size_t nonTerminalCount = 0;
   };
 
-  /// @param addr The address of the function for the non-terminal within the
-  /// bytecode module.
-  ///
-  /// @return The index of the terminal within the symbol table.
-  SymbolIndex appendNonTerm(size_t addr)
-  {
-    NonTerminal nonTerm;
+  std::vector<State> stateStack;
 
-    nonTerm.address = addr;
-
-    this->nonTerminals.emplace_back(nonTerm);
-
-    SymbolIndex index{ false, this->nonTerminals.size() - 1 };
-
-    this->symbolIndices.emplace_back(index);
-
-    return index;
-  }
-
-  void appendChild(NonTerminal& nonTerm) { nonTerm.childrenCount++; }
-
-  /// @return The offset of the terminal within the symbol index table.
-  size_t appendTerm(size_t start, size_t length)
-  {
-    Terminal term;
-    term.offset = start;
-    term.length = length;
-
-    this->terminals.emplace_back(term);
-
-    SymbolIndex index{ true, this->terminals.size() - 1 };
-
-    this->symbolIndices.emplace_back(index);
-
-    return this->symbolIndices.size() - 1;
-  }
-
-  void copyRuleMap(const std::map<size_t, std::string>& ruleMap_)
-  {
-    this->ruleMap = ruleMap_;
-  }
-
-  NonTerminal& getNonTerminal(const SymbolIndex& sym)
-  {
-    return this->nonTerminals[sym.index];
-  }
-
-  void setChildrenOffset(NonTerminal& nonTerm, size_t offset)
-  {
-    nonTerm.childrenOffset = offset;
-  }
-
-  void setSource(const char* s, size_t len)
-  {
-    this->source = s;
-    this->sourceLen = len;
-  }
-
-private:
-  friend ParseTree;
-
-  const char* source = "";
-
-  size_t sourceLen = 0;
-
-  std::map<size_t, std::string> ruleMap;
-
-  std::vector<Terminal> terminals;
-
-  std::vector<NonTerminal> nonTerminals;
-
-  std::vector<SymbolIndex> symbolIndices;
+  std::vector<std::unique_ptr<NonTerminalImpl>> nonTerminalStack;
 };
 
-ParseTree::ParseTree(ParseTree&& other) noexcept
-  : implPtr(other.implPtr)
-{
-  other.implPtr = nullptr;
-}
+//===========
+// }}} Parser
 
-ParseTree::~ParseTree()
-{
-  delete this->implPtr;
-}
-
-ParseTreeImpl&
-ParseTree::getImpl()
+std::unique_ptr<NonTerminal>
+Grammar::parse(const char* input, size_t length) const
 {
   if (!this->implPtr)
-    this->implPtr = new ParseTreeImpl();
+    return nullptr;
 
-  return *this->implPtr;
-}
+  auto startRuleName = this->implPtr->getStartRuleName();
 
-const char*
-ParseTree::getCharData(const Terminal& term) const
-{
-  if (!this->implPtr)
-    return "";
+  auto ruleIndex = this->implPtr->findDefinitionIndex(startRuleName.c_str());
 
-  if (term.offset >= this->implPtr->sourceLen)
-    // This may be a futile check, since the terminal probably has a length
-    // that is greater than zero if something like this happens. In any case,
-    // leaving this check probably won't hurt.
-    return "";
+  Parser parser(*this->implPtr, input, length);
 
-  return this->implPtr->source + term.offset;
-}
+  parser.parseRule(ruleIndex);
 
-const char*
-ParseTree::getName(const NonTerminal& nonTerm) const
-{
-  if (!this->implPtr)
-    return "";
-
-  auto it = this->implPtr->ruleMap.find(nonTerm.address);
-
-  if (it == this->implPtr->ruleMap.end())
-    return "";
-  else
-    return it->second.c_str();
-}
-
-const NonTerminal&
-ParseTree::getRoot() const noexcept
-{
-  if (!this->implPtr || this->implPtr->nonTerminals.empty())
-    return nullNonTerm();
-
-  return this->implPtr->nonTerminals[0];
-}
-
-void
-ParseTree::print(const NonTerminal& nonTerminal, std::ostream& stream) const
-{
-  if (!this->implPtr)
-    return;
-
-  ParseTreePrinter printer(stream);
-
-  printer.visit(*this, nonTerminal);
-}
-
-void
-ParseTree::visitChildren(const NonTerminal& nonTerm,
-                         SymbolVisitor& visitor) const
-{
-  if (!this->implPtr)
-    return;
-
-  for (size_t i = 0; i < nonTerm.childrenCount; i++) {
-
-    size_t childIndex = nonTerm.childrenOffset + i;
-
-    assert(childIndex < this->implPtr->symbolIndices.size());
-
-    auto symIndex = this->implPtr->symbolIndices[childIndex];
-
-    if (symIndex.isTerminal) {
-      assert(symIndex.index < this->implPtr->terminals.size());
-      visitor.visit(*this, this->implPtr->terminals[symIndex.index]);
-    } else {
-      assert(symIndex.index < this->implPtr->nonTerminals.size());
-      visitor.visit(*this, this->implPtr->nonTerminals[symIndex.index]);
-    }
-  }
-}
-
-//===============
-// }}} Parse Tree
-
-// {{{ VM
-//=======
-
-namespace {
-
-struct StackFrame final
-{
-  size_t returnAddr = 0;
-  /// The index of the VM within the input being parsed at the time that the
-  /// function call was made. This value gets discarded if the function call
-  /// does not get aborted.
-  size_t sourceIdx = 0;
-};
-
-class VM final : public InstVisitor
-{
-public:
-  VM(const UniqueInstPtr* c,
-     size_t cs,
-     const char* src,
-     size_t len,
-     ParseTreeImpl& pt)
-    : code(c)
-    , codeSize(cs)
-    , source(src)
-    , sourceLen(len)
-    , parseTree(pt)
-  {}
-
-  void exec()
-  {
-    this->instPtr = 0;
-
-    this->sourceIdx = 0;
-
-    this->callStack.clear();
-
-    this->nonTerminalStack.clear();
-
-    this->call(0);
-
-    while ((this->callStack.size() > 0) && (this->instPtr < this->codeSize))
-      this->code[this->instPtr++]->accept(*this);
-  }
-
-private:
-  void visit(const RetInst&) override
-  {
-    if (this->callStack.empty()) {
-      this->abortVM();
-      return;
-    }
-
-    this->instPtr = this->callStack.back().returnAddr;
-
-    this->callStack.pop_back();
-  }
-
-  void visit(const ExpectInst& expectInst) override
-  {
-    const auto& expected = expectInst.getExpected();
-
-    if (this->getRemaining() < expected.size()) {
-      abortFunctionCall();
-      return;
-    }
-
-    for (size_t i = 0; i < expected.size(); i++) {
-      if (this->peek(i) != expected[i]) {
-        abortFunctionCall();
-        return;
-      }
-    }
-
-    this->advance(expected.size());
-  }
-
-  void visit(const ProduceTermInst&) override
-  {
-    if (this->callStack.empty())
-      return;
-
-    const auto& currentFrame = this->callStack.back();
-
-    auto length = this->sourceIdx - currentFrame.sourceIdx;
-
-    produceTerm(currentFrame.sourceIdx, length);
-  }
-
-  void produceTerm(size_t start, size_t length)
-  {
-    if (this->nonTerminalStack.empty())
-      return;
-
-    size_t termOffset = this->parseTree.appendTerm(start, length);
-
-    auto& parentNonTerminal = getCurrentNonTerminal();
-
-    if (parentNonTerminal.getChildrenCount() == 0)
-      this->parseTree.setChildrenOffset(parentNonTerminal, termOffset);
-
-    this->parseTree.appendChild(parentNonTerminal);
-  }
-
-  NonTerminal& getCurrentNonTerminal()
-  {
-    return this->parseTree.getNonTerminal(this->nonTerminalStack.back());
-  }
-
-  void abortFunctionCall()
-  {
-    if (this->callStack.empty())
-      return;
-
-    auto frame = this->callStack.back();
-    this->sourceIdx = frame.sourceIdx;
-    this->instPtr = frame.returnAddr;
-
-    this->callStack.pop_back();
-  }
-
-  void call(size_t addr)
-  {
-    StackFrame stackFrame;
-    stackFrame.returnAddr = this->instPtr;
-    stackFrame.sourceIdx = this->sourceIdx;
-
-    this->callStack.emplace_back(stackFrame);
-
-    this->instPtr = addr;
-
-    this->nonTerminalStack.emplace_back(this->parseTree.appendNonTerm(addr));
-  }
-
-  void abortVM() { this->instPtr = std::numeric_limits<size_t>::max(); }
-
-  char peek(size_t relativeOffset) const noexcept
-  {
-    auto absIndex = this->sourceIdx + relativeOffset;
-
-    return (absIndex < this->sourceLen) ? this->source[absIndex] : 0;
-  }
-
-  size_t getRemaining() const noexcept
-  {
-    if (this->sourceIdx >= this->sourceLen)
-      return 0;
-    else
-      return this->sourceLen - this->sourceIdx;
-  }
-
-  void advance(size_t count) noexcept
-  {
-    this->sourceIdx += count;
-
-    this->sourceIdx = std::min(this->sourceIdx, this->sourceLen);
-  }
-
-  std::vector<StackFrame> callStack;
-
-  std::vector<ParseTreeImpl::SymbolIndex> nonTerminalStack;
-
-  const UniqueInstPtr* code = nullptr;
-
-  size_t codeSize = 0;
-
-  const char* source = "";
-
-  size_t sourceLen = 0;
-
-  size_t sourceIdx = 0;
-
-  size_t instPtr = 0;
-
-  ParseTreeImpl& parseTree;
-};
-
-} // namespace
-
-//=======
-// }}} VM
-
-auto
-Module::exec(const char* input, size_t length) -> ParseTree
-{
-  ParseTree parseTree;
-
-  if (!this->implPtr)
-    return parseTree;
-
-  parseTree.getImpl().setSource(input, length);
-
-  parseTree.getImpl().copyRuleMap(this->implPtr->ruleMap);
-
-  VM vm(this->implPtr->code.data(),
-        this->implPtr->code.size(),
-        input,
-        length,
-        parseTree.getImpl());
-
-  vm.exec();
-
-  return parseTree;
+  return parser.popNonTerminal();
 }
 
 } // namespace peg
