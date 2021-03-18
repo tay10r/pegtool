@@ -462,9 +462,11 @@ public:
   {}
 
   template<typename Formatter>
-  Diagnostic makeErr(const Token& tok, Formatter formatter) const
+  Diagnostic make(const Token& tok,
+                  Formatter formatter,
+                  Severity severity = Severity::Error) const
   {
-    return Diagnostic::make(tok, source, length, formatter);
+    return Diagnostic::make(tok, source, length, formatter, severity);
   }
 
 private:
@@ -1378,7 +1380,7 @@ public:
     auto index = referenceExpr.getRuleIndex();
 
     if (index == std::numeric_limits<size_t>::max()) {
-      auto diag = diagFactory.makeErr(tok, [](std::ostream& errStream) {
+      auto diag = diagFactory.make(tok, [](std::ostream& errStream) {
         errStream << "Definition for this is missing.";
       });
 
@@ -1400,6 +1402,37 @@ private:
 
 //======================
 // }}} Symbol Resolution
+
+// {{{ Reference Checker
+//======================
+
+namespace {
+
+/// Checks to see if the name of a rule is found in an expression.
+class ReferenceChecker final : public RecursiveExprVisitor
+{
+public:
+  ReferenceChecker(const char* n)
+    : name(n)
+  {}
+
+  bool foundReference() const noexcept { return this->foundFlag; }
+
+  bool visit(const ReferenceExpr& referenceExpr) override
+  {
+    foundFlag |= referenceExpr.toString() == name;
+    return true;
+  }
+
+private:
+  bool foundFlag = false;
+  const char* name = nullptr;
+};
+
+} // namespace
+
+//======================
+// }}} Reference Checker
 
 // {{{ Grammar
 //============
@@ -1458,12 +1491,25 @@ public:
       def.acceptExprMutator(symResolver);
   }
 
+  void runSemanticChecks(const char* source, size_t sourceLen)
+  {
+    checkSymbolResolution(source, sourceLen);
+
+    checkRuleUsage(source, sourceLen);
+  }
+
+private:
+  void visitAllExprs(ExprVisitor& v) const
+  {
+    for (const auto& def : this->definitions)
+      def.acceptExprVisitor(v);
+  }
+
   void checkSymbolResolution(const char* source, size_t sourceLen)
   {
     SymbolResolutionChecker checker(source, sourceLen);
 
-    for (auto& def : this->definitions)
-      def.acceptExprVisitor(checker);
+    visitAllExprs(checker);
 
     auto diags = checker.getDiagnostics();
 
@@ -1471,7 +1517,41 @@ public:
       this->diagnostics.emplace_back(std::move(diag));
   }
 
-private:
+  void checkRuleUsage(const char* source, size_t sourceLen)
+  {
+    DiagnosticFactory diagFactory(source, sourceLen);
+
+    for (const auto& def : this->definitions) {
+
+      auto defName = def.getName();
+
+      if (defName == this->getStartRuleName())
+        continue;
+
+      ReferenceChecker checker(defName.c_str());
+
+      for (const auto& otherDef : this->definitions) {
+        if (&otherDef == &def)
+          continue;
+
+        otherDef.acceptExprVisitor(checker);
+      }
+
+      auto formatter = [&defName](std::ostream& errStream) {
+        errStream << "'" << defName << "' is never referenced.";
+      };
+
+      auto defNameTok = def.getIdentifierToken();
+
+      if (!checker.foundReference()) {
+
+        auto diag = diagFactory.make(defNameTok, formatter, Severity::Warning);
+
+        this->diagnostics.emplace_back(std::move(diag));
+      }
+    }
+  }
+
   friend Grammar;
 
   friend GrammarParser;
@@ -1556,7 +1636,7 @@ Grammar::load(const char* src, size_t len, const char* name)
 
   implRef.resolveSymbols();
 
-  implRef.checkSymbolResolution(src, len);
+  implRef.runSemanticChecks(src, len);
 }
 
 void

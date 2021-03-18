@@ -25,18 +25,13 @@ void
 printStringComparison(const std::string& a, const std::string& b);
 
 bool
-handleFailureTest(const peg::Grammar& grammar)
+verifyDiagnosticOutput(const peg::Grammar& grammar, const char* expectedErrPath)
 {
-  if (!grammar.hasErrors()) {
-    std::cerr << "Test passed when it was expected to fail." << std::endl;
-    return false;
-  }
-
   auto success = true;
 
   auto actualErr = diagnosticsToString(grammar);
 
-  auto expectedErr = readFile("expected_err.txt");
+  auto expectedErr = readFile(expectedErrPath);
 
   if (expectedErr != actualErr) {
     std::cerr << "Diagnostics did not meet expectations.";
@@ -100,12 +95,21 @@ main()
 
   grammar.load(grammarStr.c_str(), grammarStr.size(), grammarPath);
 
-  if (fileExists("should_fail.txt"))
-    return handleFailureTest(grammar) ? EXIT_SUCCESS : EXIT_FAILURE;
+  if (fileExists("should_fail.txt")) {
+    if (!grammar.hasErrors()) {
+      std::cerr << "Test passed when it was expected to fail." << std::endl;
+      return EXIT_FAILURE;
+    }
+  } else {
+    if (grammar.hasErrors()) {
+      std::cerr << "Test failed when it was expected to pass." << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
 
-  if (grammar.hasErrors()) {
-    std::cerr << "Test failed when it was expected to pass." << std::endl;
-    return EXIT_FAILURE;
+  if (fileExists("expected_err.txt")) {
+    if (!verifyDiagnosticOutput(grammar, "expected_err.txt"))
+      return EXIT_FAILURE;
   }
 
   if (fileExists("input.txt")) {

@@ -36,7 +36,9 @@ if(PEGTOOL_TESTS)
     sequence_expr_2
     reference_expr
     reference_expr_unresolved
-    duplicate_definition)
+    duplicate_definition
+    unused_definition
+    unused_definition_2)
 
   foreach (test ${tests})
 
