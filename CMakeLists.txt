@@ -31,8 +31,19 @@ if(PEGTOOL_TESTS)
     literal_expr
     literal_expr_2
     literal_expr_3
+    literal_expr_lf
+    literal_expr_cr
+    literal_expr_tab
+    literal_expr_inner_squote
+    literal_expr_inner_dquote
     literal_expr_missing_right_squote
     literal_expr_missing_right_dquote
+    literal_expr_octal
+    literal_expr_octal_2
+    literal_expr_octal_3
+    literal_expr_octal_4
+    literal_expr_backslash
+    literal_expr_backslash_fail
     sequence_expr
     sequence_expr_2
     reference_expr

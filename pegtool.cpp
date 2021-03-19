@@ -519,9 +519,14 @@ private:
   std::string data;
 };
 
-using UChar = unsigned char;
+template<char lo, char hi>
+bool
+inRange(char c) noexcept
+{
+  return (c >= lo) && (c <= hi);
+}
 
-using Utf8Char = std::array<UChar, 4>;
+using UChar = unsigned char;
 
 /// @return The number of bytes that successfully match a UTF-8 sequence.
 size_t
@@ -563,13 +568,49 @@ getChar(const CharCursor& cursor, std::string& str, size_t offset)
     return 0;
   }
 
-  switch (cursor.peek(offset + 1)) {
+  auto secondChar = cursor.peek(offset + 1);
+
+  switch (secondChar) {
     case 'n':
       str.push_back('\n');
       return 2;
+    case 'r':
+      str.push_back('\r');
+      return 2;
+    case 't':
+      str.push_back('\t');
+      return 2;
+    case '\\':
+    case '\'':
+    case '"':
+      str.push_back(secondChar);
+      return 2;
   }
 
-  // TODO
+  if (inRange<'0', '2'>(secondChar) &&
+      inRange<'0', '7'>(cursor.peek(offset + 2)) &&
+      inRange<'0', '7'>(cursor.peek(offset + 3))) {
+    UChar value = (secondChar - '0') * 64;
+    value += (cursor.peek(offset + 2) - '0') * 8;
+    value += (cursor.peek(offset + 3) - '0');
+    str.push_back(char(value));
+    return 4;
+  }
+
+  if (inRange<'0', '7'>(secondChar) &&
+      inRange<'0', '7'>(cursor.peek(offset + 2))) {
+    UChar value = (secondChar - '0') * 8;
+    value += (cursor.peek(offset + 2) - '0');
+    str.push_back(char(value));
+    return 3;
+  }
+
+  if (inRange<'0', '7'>(secondChar)) {
+    str.push_back(secondChar - '0');
+    return 2;
+  }
+
+  // TODO : unicode and hex
 
   return 0;
 }
@@ -967,9 +1008,20 @@ public:
         case '\n':
           this->stream << "\\n";
           continue;
+        case '\'':
+          this->stream << "\\'";
+          continue;
+        case '\\':
+          this->stream << "\\\\";
+          continue;
       }
 
-      // TODO : Handle UTF-8 sequences.
+      if (static_cast<UChar>(c) < static_cast<UChar>(' ')) {
+        this->stream << "\\x";
+        this->stream << static_cast<char>((c >> 4) + '0');
+        this->stream << static_cast<char>((c & 15) + '0');
+        continue;
+      }
 
       this->stream << data[i];
     }
