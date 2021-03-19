@@ -41,7 +41,10 @@ if(PEGTOOL_TESTS)
     unused_definition
     unused_definition_2
     dot_expr
-    dot_expr_2)
+    dot_expr_2
+    dot_expr_3
+    dot_expr_4
+    dot_expr_5)
 
   foreach (test ${tests})
 

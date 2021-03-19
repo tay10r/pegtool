@@ -519,6 +519,28 @@ private:
   std::string data;
 };
 
+using UChar = unsigned char;
+
+using Utf8Char = std::array<UChar, 4>;
+
+/// @return The number of bytes that successfully match a UTF-8 sequence.
+size_t
+utf8Length(UChar prefixByte)
+{
+  // branchless utf-8
+
+  // Taken from https://nullprogram.com/blog/2017/10/06
+
+  static const UChar lengths[]{
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 3, 3, 4, 0
+  };
+
+  UChar len = lengths[prefixByte >> 3];
+
+  return len + !len;
+}
+
 /// This function gets a character litearl value from the cursor at a given
 /// offset, putting the character at the end of the string container passed
 /// in the parameter list.
@@ -1860,7 +1882,11 @@ public:
     if (this->remaining() < 1)
       return false;
 
-    this->produceTerm(1);
+    auto length = this->getUtf8LengthAt(0);
+    if (!length)
+      return false;
+
+    this->produceTerm(length);
 
     return true;
   }
@@ -1963,6 +1989,14 @@ private:
     parentNonTerm.appendChild(new Terminal(termPtr, length));
 
     this->inputOffset += length;
+  }
+
+  UChar getUtf8LengthAt(size_t relOffset) const
+  {
+    if (relOffset >= remaining())
+      return 0;
+    else
+      return utf8Length(this->input[this->inputOffset + relOffset]);
   }
 
   bool equalAt(size_t relOffset, char c)
