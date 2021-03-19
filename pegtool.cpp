@@ -611,7 +611,8 @@ enum class CharErr
   None,
   InvalidCodePoint,
   IncompleteCodePoint16,
-  IncompleteCodePoint32
+  IncompleteCodePoint32,
+  InvalidEscapeSequence
 };
 
 /// This function gets a character litearl value from the cursor at a given
@@ -749,7 +750,9 @@ getChar(const CharCursor& cursor, std::string& str, size_t offset, CharErr& err)
     return len + 2;
   }
 
-  return 0;
+  err = CharErr::InvalidEscapeSequence;
+
+  return 2;
 }
 
 } // namespace
@@ -1442,6 +1445,9 @@ private:
               break;
             case CharErr::InvalidCodePoint:
               errStream << "This is not a valid code point.";
+              break;
+            case CharErr::InvalidEscapeSequence:
+              errStream << "This is not a recognized escape sequence.";
               break;
           }
         });

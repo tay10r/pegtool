@@ -72,7 +72,8 @@ if(PEGTOOL_TESTS)
     dot_expr_2
     dot_expr_3
     dot_expr_4
-    dot_expr_5)
+    dot_expr_5
+    invalid_escape_sequence_diag)
 
   foreach (test ${tests})
 
