@@ -44,6 +44,12 @@ if(PEGTOOL_TESTS)
     literal_expr_octal_4
     literal_expr_backslash
     literal_expr_backslash_fail
+    literal_expr_hex
+    literal_expr_hex_fail
+    literal_expr_hex_uppercase
+    literal_expr_hex_uppercase_fail
+    literal_expr_hex_single_digit
+    literal_expr_hex_single_digit_fail
     sequence_expr
     sequence_expr_2
     reference_expr

@@ -526,6 +526,24 @@ inRange(char c) noexcept
   return (c >= lo) && (c <= hi);
 }
 
+bool
+isDigit(char c) noexcept
+{
+  return inRange<'0', '9'>(c);
+}
+
+char
+toLower(char c) noexcept
+{
+  return inRange<'A', 'Z'>(c) ? (c + 32) : c;
+}
+
+bool
+isHexDigit(char c) noexcept
+{
+  return isDigit(c) || inRange<'a', 'f'>(toLower(c));
+}
+
 using UChar = unsigned char;
 
 /// @return The number of bytes that successfully match a UTF-8 sequence.
@@ -610,7 +628,28 @@ getChar(const CharCursor& cursor, std::string& str, size_t offset)
     return 2;
   }
 
-  // TODO : unicode and hex
+  auto getHexValue = [](char c) {
+    if (inRange<'0', '9'>(c))
+      return c - '0';
+    else
+      return (toLower(c) - 'a') + 10;
+  };
+
+  if ((toLower(secondChar) == 'x') && isHexDigit(cursor.peek(offset + 2)) &&
+      isHexDigit(cursor.peek(offset + 3))) {
+    UChar value = 0;
+    value += getHexValue(cursor.peek(offset + 2)) * 16;
+    value += getHexValue(cursor.peek(offset + 3));
+    str.push_back(char(value));
+    return 4;
+  }
+
+  if ((toLower(secondChar) == 'x') && isHexDigit(cursor.peek(offset + 2))) {
+    str.push_back(getHexValue(cursor.peek(offset + 2)));
+    return 3;
+  }
+
+  // TODO : unicode
 
   return 0;
 }
