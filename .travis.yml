@@ -9,6 +9,6 @@ compiler:
   - clang
 
 script:
-  mkdir build && cd build
-  cmake .. -DCMAKE_BUILD_TYPE=Release -DPEGTOOL_TESTS=1
-  make
+  - mkdir build && cd build
+  - cmake .. -DCMAKE_BUILD_TYPE=Release -DPEGTOOL_TESTS=1
+  - make
