@@ -5,7 +5,7 @@ project(pegtool)
 option(PEGTOOL_TESTS "Whether or not to build the unit tests.")
 
 if(NOT MSVC)
-  set(cxxflags -Wall -Wextra -Werror -Wfatal-errors)
+  set(cxxflags -Wall -Wextra -Werror -Wfatal-errors -std=c++11)
 endif(NOT MSVC)
 
 add_library(peg pegtool.h pegtool.cpp)
@@ -13,8 +13,6 @@ add_library(peg pegtool.h pegtool.cpp)
 target_compile_options(peg PRIVATE ${cxxflags})
 
 target_include_directories(peg PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-
-target_compile_features(peg PRIVATE cxx_std_11)
 
 if(PEGTOOL_TESTS)
 

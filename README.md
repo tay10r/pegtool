@@ -3,7 +3,8 @@ pegtool
 
 *Note:* **This project is a work in progress and is not ready for usage.**
 
-A PEG parser generator for C++.
+`pegtool` is a dynamic parser generator for generating parse trees from input
+files.
 
 ### API Usage
 
