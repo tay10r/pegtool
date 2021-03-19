@@ -50,6 +50,17 @@ if(PEGTOOL_TESTS)
     literal_expr_hex_uppercase_fail
     literal_expr_hex_single_digit
     literal_expr_hex_single_digit_fail
+    literal_expr_unicode
+    literal_expr_unicode_fail
+    literal_expr_unicode_2
+    literal_expr_unicode_2_fail
+    literal_expr_unicode_3
+    literal_expr_unicode_3_fail
+    literal_expr_unicode_4
+    literal_expr_unicode_4_fail
+    literal_expr_unicode_diag
+    literal_expr_unicode_diag_2
+    literal_expr_unicode_diag_3
     sequence_expr
     sequence_expr_2
     reference_expr

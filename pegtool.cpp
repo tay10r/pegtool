@@ -564,14 +564,66 @@ utf8Length(UChar prefixByte)
   return len + !len;
 }
 
+/// @return False if the UTF-32 character is not valid Unicode.
+bool
+convertUtf32To8(char32_t in, std::string& out)
+{
+  // See section 3 of RFC 3629 on "UTF-8 definition"
+
+  if (in <= 0x7f) {
+    out.push_back(static_cast<char>(in));
+  } else if ((in >= 0x80) && (in <= 0x7ff)) {
+    out.push_back(static_cast<char>((in >> 6) & 0x1f) | 0xc0);
+    out.push_back(static_cast<char>((in >> 0) & 0x3f) | 0x80);
+  } else if ((in >= 0x800) && (in <= 0xffff)) {
+    out.push_back(static_cast<char>(((in >> 0x0c) & 0x0f) | 0xe0));
+    out.push_back(static_cast<char>(((in >> 0x06) & 0x3f) | 0x80));
+    out.push_back(static_cast<char>(((in >> 0x00) & 0x3f) | 0x80));
+  } else if ((in >= 0x10000) && (in <= 0x10ffff)) {
+    out.push_back(static_cast<char>(((in >> 0x12) & 0x03) | 0xf0));
+    out.push_back(static_cast<char>(((in >> 0x0c) & 0x3f) | 0x80));
+    out.push_back(static_cast<char>(((in >> 0x06) & 0x3f) | 0x80));
+    out.push_back(static_cast<char>(((in >> 0x00) & 0x3f) | 0x80));
+  } else {
+    return false;
+  }
+
+  return true;
+}
+
+size_t
+getHexSequenceLength(const CharCursor& cursor, size_t startingOffset)
+{
+  size_t len = 0;
+
+  for (size_t i = startingOffset; !cursor.outOfBounds(i); i++) {
+    if (isHexDigit(cursor.peek(i)))
+      len++;
+    else
+      break;
+  }
+
+  return len;
+}
+
+enum class CharErr
+{
+  None,
+  InvalidCodePoint,
+  IncompleteCodePoint16,
+  IncompleteCodePoint32
+};
+
 /// This function gets a character litearl value from the cursor at a given
 /// offset, putting the character at the end of the string container passed
 /// in the parameter list.
 ///
 /// @return The number of characters used, starting at @p offset.
 size_t
-getChar(const CharCursor& cursor, std::string& str, size_t offset)
+getChar(const CharCursor& cursor, std::string& str, size_t offset, CharErr& err)
 {
+  err = CharErr::None;
+
   if (cursor.outOfBounds(offset))
     return 0;
 
@@ -649,7 +701,53 @@ getChar(const CharCursor& cursor, std::string& str, size_t offset)
     return 3;
   }
 
-  // TODO : unicode
+  if (secondChar == 'u') {
+
+    auto len = getHexSequenceLength(cursor, offset + 2);
+
+    if (len != 4) {
+      err = CharErr::IncompleteCodePoint16;
+      return len + 2; // +2 for '\\' and 'u'
+    }
+
+    char32_t value = 0;
+
+    value |= char32_t(getHexValue(cursor.peek(offset + 2))) << 12;
+    value |= char32_t(getHexValue(cursor.peek(offset + 3))) << 8;
+    value |= char32_t(getHexValue(cursor.peek(offset + 4))) << 4;
+    value |= char32_t(getHexValue(cursor.peek(offset + 5)));
+
+    if (!convertUtf32To8(value, str))
+      err = CharErr::InvalidCodePoint;
+
+    return len + 2;
+  }
+
+  if (secondChar == 'U') {
+
+    auto len = getHexSequenceLength(cursor, offset + 2);
+
+    if (len != 8) {
+      err = CharErr::IncompleteCodePoint32;
+      return len + 2; // +2 for '\\' and 'U'
+    }
+
+    char32_t value = 0;
+
+    value |= char32_t(getHexValue(cursor.peek(offset + 2))) << 28;
+    value |= char32_t(getHexValue(cursor.peek(offset + 3))) << 24;
+    value |= char32_t(getHexValue(cursor.peek(offset + 4))) << 20;
+    value |= char32_t(getHexValue(cursor.peek(offset + 5))) << 16;
+    value |= char32_t(getHexValue(cursor.peek(offset + 6))) << 12;
+    value |= char32_t(getHexValue(cursor.peek(offset + 7))) << 8;
+    value |= char32_t(getHexValue(cursor.peek(offset + 8))) << 4;
+    value |= char32_t(getHexValue(cursor.peek(offset + 9)));
+
+    if (!convertUtf32To8(value, str))
+      err = CharErr::InvalidCodePoint;
+
+    return len + 2;
+  }
 
   return 0;
 }
@@ -1320,7 +1418,38 @@ private:
         return UniqueExprPtr(literalExpr.release());
       }
 
-      size_t delta = getChar(this->cursor, data, len);
+      CharErr charErr = CharErr::None;
+
+      size_t delta = getChar(this->cursor, data, len, charErr);
+
+      if (charErr != CharErr::None) {
+
+        this->cursor.next(len);
+
+        Token invalidCharToken;
+
+        this->produce(invalidCharToken, delta);
+
+        this->formatErr(invalidCharToken, [charErr](std::ostream& errStream) {
+          switch (charErr) {
+            case CharErr::None:
+              break;
+            case CharErr::IncompleteCodePoint16:
+              errStream << "Universal character name requires 4 hex digits.";
+              break;
+            case CharErr::IncompleteCodePoint32:
+              errStream << "Universal character name requires 8 hex digits.";
+              break;
+            case CharErr::InvalidCodePoint:
+              errStream << "This is not a valid code point.";
+              break;
+          }
+        });
+
+        errFlag = true;
+
+        return nullptr;
+      }
 
       if (!delta)
         break;
