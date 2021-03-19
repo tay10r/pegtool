@@ -1,11 +1,10 @@
-#include <gtest/gtest.h>
-
 #include <pegtool.h>
 
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <vector>
 
 namespace {
 
