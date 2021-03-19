@@ -98,6 +98,10 @@ main()
   if (fileExists("should_fail.txt")) {
     if (!grammar.hasErrors()) {
       std::cerr << "Test passed when it was expected to fail." << std::endl;
+      std::cerr << std::endl;
+      std::cerr << "Contains the following diagnostics:" << std::endl;
+      std::cerr << std::endl;
+      grammar.printDiagnostics(std::cerr);
       return EXIT_FAILURE;
     }
   } else {
@@ -110,6 +114,12 @@ main()
   if (fileExists("expected_err.txt")) {
     if (!verifyDiagnosticOutput(grammar, "expected_err.txt"))
       return EXIT_FAILURE;
+  } else {
+    if (grammar.hasDiagnostics()) {
+      std::cerr << "Found unexpected diagnostics:" << std::endl;
+      grammar.printDiagnostics(std::cerr);
+      return EXIT_FAILURE;
+    }
   }
 
   if (fileExists("input.txt")) {

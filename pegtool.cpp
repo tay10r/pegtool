@@ -105,15 +105,6 @@ Token::operator==(const char* s) const noexcept
   return std::memcmp(s, this->data, this->size) == 0;
 }
 
-char
-Token::operator[](size_t i) const noexcept
-{
-  if (i >= this->size)
-    return 0;
-  else
-    return this->data[i];
-}
-
 } // namespace
 
 //==========
@@ -528,6 +519,39 @@ private:
   std::string data;
 };
 
+/// This function gets a character litearl value from the cursor at a given
+/// offset, putting the character at the end of the string container passed
+/// in the parameter list.
+///
+/// @return The number of characters used, starting at @p offset.
+size_t
+getChar(const CharCursor& cursor, std::string& str, size_t offset)
+{
+  if (cursor.outOfBounds(offset))
+    return 0;
+
+  if (cursor.peek(offset) != '\\') {
+    // TODO : handle UTF-8
+    str.push_back(cursor.peek(offset));
+    return 1;
+  }
+
+  if (cursor.outOfBounds(offset + 1)) {
+    // TODO
+    return 0;
+  }
+
+  switch (cursor.peek(offset + 1)) {
+    case 'n':
+      str.push_back('\n');
+      return 2;
+  }
+
+  // TODO
+
+  return 0;
+}
+
 } // namespace
 
 //=======================
@@ -596,24 +620,22 @@ public:
 class LiteralExpr final : public Expr
 {
 public:
+  LiteralExpr(std::string&& d)
+    : data(std::move(d))
+  {}
+
   bool accept(ExprVisitor& v) const override { return v.visit(*this); }
 
   bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
 
-  std::string toString() const
-  {
-    std::string result;
-
-    for (size_t i = 2; i < this->token.getLength(); i++)
-      result.push_back(this->token[i - 1]);
-
-    return result;
-  }
+  const std::string& getData() const noexcept { return this->data; }
 
 private:
   friend GrammarParser;
 
   LiteralExpr() = default;
+
+  std::string data;
 
   Token token;
 };
@@ -909,8 +931,26 @@ public:
 
     const char* data = term.getData();
 
-    for (size_t i = 0; i < term.getLength(); i++)
+    for (size_t i = 0; i < term.getLength(); i++) {
+
+      char c = data[i];
+
+      switch (c) {
+        case '\t':
+          this->stream << "\\t";
+          continue;
+        case '\r':
+          this->stream << "\\r";
+          continue;
+        case '\n':
+          this->stream << "\\n";
+          continue;
+      }
+
+      // TODO : Handle UTF-8 sequences.
+
       this->stream << data[i];
+    }
 
     this->stream << '\'' << std::endl;
   }
@@ -1150,20 +1190,29 @@ private:
 
     size_t len = 1;
 
+    std::string data;
+
     while (!this->cursor.outOfBounds(len)) {
 
       auto last = this->cursor.peek(len);
 
-      if (last != first) {
-        len++;
-        continue;
+      if (last == first) {
+
+        using UPtr = std::unique_ptr<LiteralExpr>;
+
+        auto literalExpr = UPtr(new LiteralExpr(std::move(data)));
+
+        produce(literalExpr->token, len + 1);
+
+        return UniqueExprPtr(literalExpr.release());
       }
 
-      auto literalExpr = std::unique_ptr<LiteralExpr>(new LiteralExpr());
+      size_t delta = getChar(this->cursor, data, len);
 
-      produce(literalExpr->token, len + 1);
+      if (!delta)
+        break;
 
-      return UniqueExprPtr(literalExpr.release());
+      len += delta;
     }
 
     Token leftQuoteChar;
@@ -1675,6 +1724,15 @@ Grammar::getImpl()
 }
 
 bool
+Grammar::hasDiagnostics() const noexcept
+{
+  if (!this->implPtr)
+    return false;
+
+  return this->implPtr->diagnostics.size() > 0;
+}
+
+bool
 Grammar::hasErrors() const noexcept
 {
   if (!this->implPtr)
@@ -1783,8 +1841,7 @@ public:
 
   bool visit(const LiteralExpr& literalExpr) override
   {
-    // TODO : Do not dynamically allocate this.
-    auto data = literalExpr.toString();
+    const auto& data = literalExpr.getData();
 
     for (size_t i = 0; i < data.size(); i++) {
       if (!this->equalAt(i, data[i]))
