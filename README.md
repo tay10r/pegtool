@@ -13,11 +13,12 @@ const char grammarSpec[] = R"(
 Example <- Foo Bar
 Foo <- 'foo'
 Bar <- 'bar'
+Space <- [ \t]
 )";
 
 peg::Grammar grammar(grammarSpec);
 
-std::unique_ptr<peg::NonTerminal> root = grammar.parse("foobar");
+std::unique_ptr<peg::Node> rootNode = grammar.parse("foo bar");
 
 root->print(std::cout);
 ```

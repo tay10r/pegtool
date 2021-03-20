@@ -71,7 +71,10 @@ if(PEGTOOL_TESTS)
     dot_expr_3
     dot_expr_4
     dot_expr_5
-    invalid_escape_sequence_diag)
+    invalid_escape_sequence_diag
+    character_class
+    character_class_fail
+    character_class_missing_right_bracket_diag)
 
   foreach (test ${tests})
 

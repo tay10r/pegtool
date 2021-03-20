@@ -512,6 +512,12 @@ public:
     , data(d)
   {}
 
+  CharLiteral() = default;
+
+  const Token& getToken() const noexcept { return this->token; }
+
+  const std::string& getData() const noexcept { return this->data; }
+
 private:
   Token token;
   /// The character literal data may not be the same as what's in the token
@@ -889,6 +895,85 @@ private:
   size_t ruleIndex = std::numeric_limits<size_t>::max();
 };
 
+class ClassExpr final : public Expr
+{
+public:
+  class EqualitySubExpr;
+  class IntervalSubExpr;
+
+  class SubExprVisitor
+  {
+  public:
+    virtual ~SubExprVisitor() = default;
+
+    virtual bool visit(const EqualitySubExpr&) = 0;
+
+    virtual bool visit(const IntervalSubExpr&) = 0;
+  };
+
+  class SubExpr
+  {
+  public:
+    virtual ~SubExpr() = default;
+
+    virtual bool accept(SubExprVisitor&) const = 0;
+  };
+
+  class EqualitySubExpr final : public SubExpr
+  {
+    CharLiteral expected;
+
+  public:
+    EqualitySubExpr(CharLiteral&& e)
+      : expected(e)
+    {}
+
+    bool accept(SubExprVisitor& v) const override { return v.visit(*this); }
+
+    const CharLiteral& getExpected() const noexcept { return this->expected; }
+  };
+
+  class IntervalSubExpr final : public SubExpr
+  {
+    CharLiteral lo;
+    CharLiteral hi;
+
+  public:
+    IntervalSubExpr(CharLiteral&& l, CharLiteral&& h)
+      : lo(std::move(l))
+      , hi(std::move(h))
+    {}
+
+    bool accept(SubExprVisitor& v) const override { return v.visit(*this); }
+
+    const CharLiteral& getLowerBound() const noexcept { return this->lo; }
+
+    const CharLiteral& getUpperBound() const noexcept { return this->hi; }
+  };
+
+  bool accept(ExprVisitor& v) const override { return v.visit(*this); }
+
+  bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
+
+  /// @return True if visiting any one of the sub expressions returns true.
+  bool acceptSubExprVisitor(SubExprVisitor& v) const noexcept
+  {
+    bool success = false;
+
+    for (const auto& subExpr : this->subExprs)
+      success |= subExpr->accept(v);
+
+    return success;
+  }
+
+  void appendSubExpr(SubExpr* subExpr) { this->subExprs.emplace_back(subExpr); }
+
+  size_t getSubExprCount() const noexcept { return this->subExprs.size(); }
+
+private:
+  std::vector<std::unique_ptr<SubExpr>> subExprs;
+};
+
 class SuffixExpr final : public Expr
 {
 public:
@@ -1043,10 +1128,15 @@ class RecursiveExprVisitor : public ExprVisitor
 {
 public:
   virtual ~RecursiveExprVisitor() = default;
+
   virtual bool visit(const GroupExpr&) override { return true; }
+
   virtual bool visit(const LiteralExpr&) override { return true; }
+
   virtual bool visit(const ClassExpr&) override { return true; }
+
   virtual bool visit(const DotExpr&) override { return true; }
+
   virtual bool visit(const ReferenceExpr&) override { return true; }
 
   virtual bool visit(const SlashExpr& slashExpr) override
@@ -1404,6 +1494,30 @@ private:
     return nullptr;
   }
 
+  bool formatCharErr(const Token& tok, CharErr charErr)
+  {
+    this->formatErr(tok, [charErr](std::ostream& errStream) {
+      switch (charErr) {
+        case CharErr::None:
+          break;
+        case CharErr::IncompleteCodePoint16:
+          errStream << "Universal character name requires 4 hex digits.";
+          break;
+        case CharErr::IncompleteCodePoint32:
+          errStream << "Universal character name requires 8 hex digits.";
+          break;
+        case CharErr::InvalidCodePoint:
+          errStream << "This is not a valid code point.";
+          break;
+        case CharErr::InvalidEscapeSequence:
+          errStream << "This is not a recognized escape sequence.";
+          break;
+      }
+    });
+
+    return false;
+  }
+
   template<typename Formatter>
   bool formatErr(const Token& tok, Formatter formatter)
   {
@@ -1469,24 +1583,7 @@ private:
 
         this->produce(invalidCharToken, delta);
 
-        this->formatErr(invalidCharToken, [charErr](std::ostream& errStream) {
-          switch (charErr) {
-            case CharErr::None:
-              break;
-            case CharErr::IncompleteCodePoint16:
-              errStream << "Universal character name requires 4 hex digits.";
-              break;
-            case CharErr::IncompleteCodePoint32:
-              errStream << "Universal character name requires 8 hex digits.";
-              break;
-            case CharErr::InvalidCodePoint:
-              errStream << "This is not a valid code point.";
-              break;
-            case CharErr::InvalidEscapeSequence:
-              errStream << "This is not a recognized escape sequence.";
-              break;
-          }
-        });
+        formatCharErr(invalidCharToken, charErr);
 
         errFlag = true;
 
@@ -1548,6 +1645,82 @@ private:
     return UniqueExprPtr(new ReferenceExpr(token));
   }
 
+  UniqueExprPtr parseClassExpr(bool& errFlag)
+  {
+    Token leftBracket;
+
+    if (!this->parseExactly(leftBracket, "["))
+      return nullptr;
+
+    using EqualityExpr = ClassExpr::EqualitySubExpr;
+    using IntervalExpr = ClassExpr::IntervalSubExpr;
+
+    std::unique_ptr<ClassExpr> classExpr(new ClassExpr());
+
+    size_t bracketBalance = 0;
+
+    while (!this->cursor.atEnd()) {
+
+      if (this->cursor.peek(0) == '[') {
+        bracketBalance++;
+      } else if (this->cursor.peek(0) == ']') {
+
+        if (!bracketBalance) {
+          Token rightToken;
+          this->produce(rightToken, 1);
+          return UniqueExprPtr(classExpr.release());
+        }
+
+        bracketBalance--;
+      }
+
+      CharErr charErr = CharErr::None;
+
+      CharLiteral first;
+
+      if (!this->parseCharLiteral(first, charErr)) {
+
+        if (charErr != CharErr::None)
+          return nullptr;
+
+        break;
+      }
+
+      if (this->cursor.peek(0) != '-') {
+        this->cursor.next(1);
+        classExpr->appendSubExpr(new EqualityExpr(std::move(first)));
+        continue;
+      }
+
+      auto cursorState = this->cursor.getState();
+
+      this->cursor.next(1);
+
+      CharLiteral second;
+
+      if (this->parseCharLiteral(second, charErr)) {
+        using I = IntervalExpr;
+        classExpr->appendSubExpr(new I(std::move(first), std::move(second)));
+        continue;
+      }
+
+      if (charErr != CharErr::None)
+        return nullptr;
+
+      classExpr->appendSubExpr(new EqualityExpr(std::move(first)));
+
+      this->cursor.restoreState(cursorState);
+    }
+
+    this->formatErr(leftBracket, [](std::ostream& errStream) {
+      errStream << "Missing ']'.";
+    });
+
+    errFlag = true;
+
+    return classExpr;
+  }
+
   UniqueExprPtr parsePrimaryExpr(bool& errFlag)
   {
     auto literalExpr = parseLiteralExpr(errFlag);
@@ -1564,6 +1737,10 @@ private:
     auto dotExpr = parseDotExpr();
     if (dotExpr)
       return dotExpr;
+
+    auto classExpr = parseClassExpr(errFlag);
+    if (classExpr)
+      return classExpr;
 
     return nullptr;
   }
@@ -1623,32 +1800,24 @@ private:
     return false;
   }
 
-  bool parseCharLiteral(CharLiteral& literal)
+  bool parseCharLiteral(CharLiteral& literal, CharErr& err)
   {
-    (void)literal;
-    return false;
-#if 0
-    if (!this->cursor.atEnd() && this->cursor.peek(0) != '\\') {
-      literal.push_pack(this->cursor.peek(0));
-      return true;
-    }
+    err = CharErr::None;
 
-    if (this->cursor.peek(0) != '\\')
-      return false;
+    std::string str;
 
-    auto escapedChar = this->cursor.peek(1);
+    size_t len = getChar(this->cursor, str, 0, err);
 
-    switch (escapedChar) {
-      case 'n':
-      case 'r':
-      case 't':
-      case '\'':
-      case '"':
-      case '[':
-      case ']':
-        break;
-    }
-#endif
+    Token token;
+
+    this->produce(token, len);
+
+    if (err != CharErr::None)
+      return formatCharErr(token, err);
+
+    literal = CharLiteral(token, std::move(str));
+
+    return true;
   }
 
   bool parseID(Token& token)
@@ -2140,7 +2309,60 @@ public:
     return true;
   }
 
-  bool visit(const ClassExpr&) override { return false; }
+  class ClassExprParser final : public ClassExpr::SubExprVisitor
+  {
+  public:
+    /// @param in A single UTF-8 code point to be matched.
+    ClassExprParser(std::string&& in)
+      : utf8Char(std::move(in))
+    {}
+
+    bool visit(const ClassExpr::EqualitySubExpr& equalityExpr) override
+    {
+      return equalityExpr.getExpected().getData() == this->utf8Char;
+    }
+
+    bool visit(const ClassExpr::IntervalSubExpr& intervalExpr) override
+    {
+      const auto& lowerBound = intervalExpr.getLowerBound().getData();
+
+      const auto& upperBound = intervalExpr.getUpperBound().getData();
+
+      return (this->utf8Char >= lowerBound) && (this->utf8Char <= upperBound);
+    }
+
+  private:
+    std::string utf8Char;
+  };
+
+  bool visit(const ClassExpr& classExpr) override
+  {
+    size_t offset = 0;
+
+    while (offset < this->remaining()) {
+
+      auto utf8Char = this->getUtf8CharAt(offset);
+
+      if (!utf8Char.size())
+        break;
+
+      size_t utf8CharLength = utf8Char.size();
+
+      ClassExprParser classExprParser(std::move(utf8Char));
+
+      if (!classExpr.acceptSubExprVisitor(classExprParser))
+        break;
+
+      offset += utf8CharLength;
+    }
+
+    if (!offset)
+      return false;
+
+    this->produceLeaf(offset);
+
+    return true;
+  }
 
   bool visit(const DotExpr&) override
   {
@@ -2261,6 +2483,18 @@ private:
       return utf8Length(this->input[this->inputOffset + relOffset]);
   }
 
+  std::string getUtf8CharAt(size_t relOffset) const
+  {
+    auto len = this->getUtf8LengthAt(relOffset);
+
+    std::string utf8Char;
+
+    for (size_t i = 0; i < len; i++)
+      utf8Char.push_back(this->input[this->inputOffset + relOffset + i]);
+
+    return utf8Char;
+  }
+
   bool equalAt(size_t relOffset, char c)
   {
     size_t absOffset = this->inputOffset + relOffset;
@@ -2320,41 +2554,3 @@ Grammar::parse(const char* input) const
 }
 
 } // namespace peg
-
-/// {{{ C API
-
-struct pegGrammar final
-{
-  peg::GrammarImpl impl;
-};
-
-struct pegCST final
-{};
-
-struct pegCursor final
-{};
-
-pegGrammar*
-pegGrammarFromUtf8(const char* spec, size_t length, const char* name)
-{
-  pegGrammar* grammar = new (std::nothrow) pegGrammar();
-  if (!grammar)
-    return nullptr;
-
-  grammar->impl.load(spec, length, name);
-
-  return grammar;
-}
-
-void
-pegDestroyGrammar(pegGrammar* grammar)
-{
-  if (!grammar)
-    // 'delete' can take null pointers but the API documentation says that
-    // the function will exit immediately if this is null.
-    return;
-
-  delete grammar;
-}
-
-/// }}} C API

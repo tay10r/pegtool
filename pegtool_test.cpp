@@ -106,6 +106,8 @@ main()
   } else {
     if (grammar.hasErrors()) {
       std::cerr << "Test failed when it was expected to pass." << std::endl;
+      std::cerr << std::endl;
+      grammar.printDiagnostics(std::cerr);
       return EXIT_FAILURE;
     }
   }
