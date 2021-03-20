@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <map>
 #include <memory>
+#include <new>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -1121,20 +1122,20 @@ private:
 
 namespace {
 
-class ParseTreePrinter final : public SymbolVisitor
+class ParseTreePrinter final
 {
 public:
   ParseTreePrinter(std::ostream& s)
     : stream(s)
   {}
 
-  void visit(const Terminal& term) override
+  void print(const Leaf& leaf)
   {
     this->indent() << '\'';
 
-    const char* data = term.getData();
+    const char* data = leaf.getData();
 
-    for (size_t i = 0; i < term.getLength(); i++) {
+    for (size_t i = 0; i < leaf.getLength(); i++) {
 
       char c = data[i];
 
@@ -1169,16 +1170,20 @@ public:
     this->stream << '\'' << std::endl;
   }
 
-  void visit(const NonTerminal& nonTerm) override
+  void print(const Node& node)
   {
-    this->indent() << nonTerm.getName() << ':' << std::endl;
+    this->indent() << node.getName() << ':' << std::endl;
 
     this->indentLevel++;
 
-    if (nonTerm.getChildrenCount() == 0)
+    if ((node.getChildCount() == 0) && (node.getLeafCount() == 0))
       this->indent() << "(empty)" << std::endl;
-    else
-      nonTerm.acceptChildrenVisitor(*this);
+
+    for (size_t i = 0; i < node.getLeafCount(); i++)
+      this->print(node.getLeaf(i));
+
+    for (size_t i = 0; i < node.getChildCount(); i++)
+      this->print(node.getChild(i));
 
     this->indentLevel--;
   }
@@ -1207,25 +1212,45 @@ private:
 
 namespace {
 
-class NonTerminalImpl final : public NonTerminal
+const Leaf&
+nullLeaf()
+{
+  static Leaf nullLeaf("", 0);
+  return nullLeaf;
+}
+
+class NodeImpl final : public Node
 {
 public:
-  NonTerminalImpl(std::string&& n)
+  static const NodeImpl& null()
+  {
+    static NodeImpl branch;
+    return branch;
+  }
+
+  NodeImpl(std::string&& n)
     : name(std::move(n))
   {}
 
-  void acceptChildrenVisitor(SymbolVisitor& v) const override
+  void appendLeaf(Leaf&& leafNode)
   {
-    for (const auto& child : this->children)
-      child->accept(v);
+    this->leafs.emplace_back(std::move(leafNode));
   }
 
-  void appendChild(Symbol* s) { this->children.emplace_back(s); }
-
-  void appendChild(std::unique_ptr<NonTerminalImpl>&& child)
+  void appendChild(std::unique_ptr<NodeImpl>&& child)
   {
-    this->children.emplace_back(std::unique_ptr<Symbol>(child.release()));
+    this->children.emplace_back(std::move(child));
   }
+
+  const Leaf& getLeaf(size_t index) const noexcept override
+  {
+    if (index >= this->leafs.size())
+      return nullLeaf();
+    else
+      return this->leafs[index];
+  }
+
+  size_t getLeafCount() const noexcept override { return this->leafs.size(); }
 
   const char* getName() const noexcept override { return this->name.c_str(); }
 
@@ -1234,24 +1259,35 @@ public:
     return this->name == n;
   }
 
-  size_t getChildrenCount() const noexcept override
+  size_t getChildCount() const noexcept override
   {
     return this->children.size();
   }
 
+  const Node& getChild(size_t index) const noexcept override
+  {
+    if (index >= this->children.size())
+      return null();
+    else
+      return *this->children[index];
+  }
+
 private:
+  NodeImpl() = default;
+
   std::string name;
-  std::vector<std::unique_ptr<Symbol>> children;
+  std::vector<Leaf> leafs;
+  std::vector<std::unique_ptr<NodeImpl>> children;
 };
 
 } // namespace
 
 void
-NonTerminal::print(std::ostream& stream) const
+Node::print(std::ostream& stream) const
 {
   ParseTreePrinter printer(stream);
 
-  printer.visit(*this);
+  printer.print(*this);
 }
 
 //============
@@ -1878,6 +1914,27 @@ public:
     checkRuleUsage(source, sourceLen);
   }
 
+  void load(const char* src, size_t len, const char* name)
+  {
+    if (name)
+      this->pathOrGrammarName = name;
+    else
+      this->pathOrGrammarName = "<untitled-grammar>";
+
+    GrammarParser parser(src, len);
+
+    while (parser.parseDef())
+      ;
+
+    this->definitions = parser.getDefinitions();
+
+    this->diagnostics = parser.getDiagnostics();
+
+    this->resolveSymbols();
+
+    this->runSemanticChecks(src, len);
+  }
+
 private:
   void visitAllExprs(ExprVisitor& v) const
   {
@@ -2013,25 +2070,7 @@ Grammar::printDiagnostics(std::ostream& stream) const
 void
 Grammar::load(const char* src, size_t len, const char* name)
 {
-  auto& implRef = this->getImpl();
-
-  if (name)
-    implRef.pathOrGrammarName = name;
-  else
-    implRef.pathOrGrammarName = "<untitled-grammar>";
-
-  GrammarParser parser(src, len);
-
-  while (parser.parseDef())
-    ;
-
-  implRef.definitions = parser.getDefinitions();
-
-  implRef.diagnostics = parser.getDiagnostics();
-
-  implRef.resolveSymbols();
-
-  implRef.runSemanticChecks(src, len);
+  this->getImpl().load(src, len, name);
 }
 
 void
@@ -2055,14 +2094,14 @@ public:
     , inputLength(len)
   {}
 
-  std::unique_ptr<NonTerminalImpl> popNonTerminal()
+  std::unique_ptr<NodeImpl> popBranch()
   {
-    if (this->nonTerminalStack.size() == 0)
+    if (this->branchStack.size() == 0)
       return nullptr;
 
-    auto nonTerm = std::move(this->nonTerminalStack.back());
+    auto nonTerm = std::move(this->branchStack.back());
 
-    this->nonTerminalStack.pop_back();
+    this->branchStack.pop_back();
 
     return nonTerm;
   }
@@ -2096,7 +2135,7 @@ public:
         return false;
     }
 
-    this->produceTerm(data.size());
+    this->produceLeaf(data.size());
 
     return true;
   }
@@ -2112,7 +2151,7 @@ public:
     if (!length)
       return false;
 
-    this->produceTerm(length);
+    this->produceLeaf(length);
 
     return true;
   }
@@ -2147,8 +2186,7 @@ private:
   {
     this->pushState();
 
-    this->nonTerminalStack.emplace_back(
-      new NonTerminalImpl(std::move(ruleName)));
+    this->branchStack.emplace_back(new NodeImpl(std::move(ruleName)));
   }
 
   void abortNonTerm() { this->restoreLastState(); }
@@ -2157,23 +2195,23 @@ private:
   {
     this->discardLastState();
 
-    if (this->nonTerminalStack.size() <= 1)
+    if (this->branchStack.size() <= 1)
       return;
 
-    auto& dst = this->nonTerminalStack[this->nonTerminalStack.size() - 2];
+    auto& dst = this->branchStack[this->branchStack.size() - 2];
 
-    auto& src = this->nonTerminalStack[this->nonTerminalStack.size() - 1];
+    auto& src = this->branchStack[this->branchStack.size() - 1];
 
     dst->appendChild(std::move(src));
 
-    this->nonTerminalStack.pop_back();
+    this->branchStack.pop_back();
   }
 
   void pushState()
   {
     State state;
     state.inputOffset = this->inputOffset;
-    state.nonTerminalCount = this->nonTerminalStack.size();
+    state.nonTerminalCount = this->branchStack.size();
     this->stateStack.push_back(state);
   }
 
@@ -2187,7 +2225,7 @@ private:
 
     this->inputOffset = state.inputOffset;
 
-    this->nonTerminalStack.resize(state.nonTerminalCount);
+    this->branchStack.resize(state.nonTerminalCount);
   }
 
   void discardLastState()
@@ -2197,22 +2235,20 @@ private:
     this->stateStack.pop_back();
   }
 
-  NonTerminalImpl& getCurrentNonTerm()
+  NodeImpl& getCurrentNonTerm()
   {
-    assert(this->nonTerminalStack.size() > 0);
+    assert(this->branchStack.size() > 0);
 
-    return *this->nonTerminalStack.back();
+    return *this->branchStack.back();
   }
 
-  void produceTerm(size_t length)
+  void produceLeaf(size_t length)
   {
-    Terminal term(this->input + this->inputOffset, length);
-
     auto& parentNonTerm = this->getCurrentNonTerm();
 
     const char* termPtr = this->input + this->inputOffset;
 
-    parentNonTerm.appendChild(new Terminal(termPtr, length));
+    parentNonTerm.appendLeaf(Leaf(termPtr, length));
 
     this->inputOffset += length;
   }
@@ -2254,13 +2290,13 @@ private:
 
   std::vector<State> stateStack;
 
-  std::vector<std::unique_ptr<NonTerminalImpl>> nonTerminalStack;
+  std::vector<std::unique_ptr<NodeImpl>> branchStack;
 };
 
 //===========
 // }}} Parser
 
-std::unique_ptr<NonTerminal>
+std::unique_ptr<Node>
 Grammar::parse(const char* input, size_t length) const
 {
   if (!this->implPtr)
@@ -2274,13 +2310,51 @@ Grammar::parse(const char* input, size_t length) const
 
   parser.parseRule(ruleIndex);
 
-  return parser.popNonTerminal();
+  return parser.popBranch();
 }
 
-std::unique_ptr<NonTerminal>
+std::unique_ptr<Node>
 Grammar::parse(const char* input) const
 {
   return Grammar::parse(input, std::strlen(input));
 }
 
 } // namespace peg
+
+/// {{{ C API
+
+struct pegGrammar final
+{
+  peg::GrammarImpl impl;
+};
+
+struct pegCST final
+{};
+
+struct pegCursor final
+{};
+
+pegGrammar*
+pegGrammarFromUtf8(const char* spec, size_t length, const char* name)
+{
+  pegGrammar* grammar = new (std::nothrow) pegGrammar();
+  if (!grammar)
+    return nullptr;
+
+  grammar->impl.load(spec, length, name);
+
+  return grammar;
+}
+
+void
+pegDestroyGrammar(pegGrammar* grammar)
+{
+  if (!grammar)
+    // 'delete' can take null pointers but the API documentation says that
+    // the function will exit immediately if this is null.
+    return;
+
+  delete grammar;
+}
+
+/// }}} C API

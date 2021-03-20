@@ -1,18 +1,16 @@
 #ifndef PEGTOOL_H
 #define PEGTOOL_H
 
+#include <stddef.h>
+
 #include <iosfwd>
 #include <memory>
 
-#include <stddef.h>
-
 namespace peg {
 
+class Node;
 class GrammarImpl;
-class NonTerminal;
-class Symbol;
-class SymbolVisitor;
-class Terminal;
+class Leaf;
 
 /// @brief This class contains all the definitions of a grammar.
 ///
@@ -74,9 +72,9 @@ public:
   /// the grammar is not specified.
   void load(const char* src);
 
-  std::unique_ptr<NonTerminal> parse(const char* input, size_t length) const;
+  std::unique_ptr<Node> parse(const char* input, size_t length) const;
 
-  std::unique_ptr<NonTerminal> parse(const char* input) const;
+  std::unique_ptr<Node> parse(const char* input) const;
 
 private:
   GrammarImpl* implPtr = nullptr;
@@ -84,57 +82,40 @@ private:
   GrammarImpl& getImpl();
 };
 
-/// This can be used to access the derived symbols in the syntax tree.
-class SymbolVisitor
+/// Represents pure text. Often the result of parsing expressions such as string
+/// literals or character classes.
+class Leaf final
 {
 public:
-  virtual ~SymbolVisitor() = default;
-
-  virtual void visit(const Terminal&) = 0;
-
-  virtual void visit(const NonTerminal&) = 0;
-};
-
-class Symbol
-{
-public:
-  virtual ~Symbol() = default;
-
-  virtual void accept(SymbolVisitor&) const = 0;
-};
-
-/// Represents terminal symbols, which are symbols that appear on the right side
-/// of the rule and do not appear on the left side. They consist of only
-/// character content and have no child symbols.
-class Terminal final : public Symbol
-{
-public:
-  Terminal(const char* d, size_t l)
+  // Not meant to be used publicly.
+  Leaf(const char* d, size_t l)
     : data(d)
     , length(l)
   {}
-
-  void accept(SymbolVisitor& v) const override { v.visit(*this); }
 
   const char* getData() const noexcept { return this->data; }
 
   size_t getLength() const noexcept { return this->length; }
 
 private:
-  /// A pointer to the beginning of the terminal data.
+  /// A pointer to the beginning of the character data.
   const char* data = nullptr;
-  /// The number of bytes captured by the terminal.
+  /// The number of bytes captured by the parsing expression.
   size_t length = 0;
 };
 
-class NonTerminal : public Symbol
+class Node
 {
 public:
-  void accept(SymbolVisitor& v) const override { v.visit(*this); }
+  virtual ~Node() = default;
 
-  virtual void acceptChildrenVisitor(SymbolVisitor& v) const = 0;
+  virtual size_t getLeafCount() const noexcept = 0;
 
-  virtual size_t getChildrenCount() const noexcept = 0;
+  virtual const Leaf& getLeaf(size_t index) const noexcept = 0;
+
+  virtual size_t getChildCount() const noexcept = 0;
+
+  virtual const Node& getChild(size_t index) const noexcept = 0;
 
   virtual const char* getName() const noexcept = 0;
 
