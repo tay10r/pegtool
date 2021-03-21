@@ -26,6 +26,37 @@ Here are examples of character literals
 
 ### Character Class
 
+A character class expression begins with `[` and ends with `]`. Within these
+brackets is a list of sub-expressions. The parser will match any one of the
+sub-expressions. A sub-expression is either an interval expression or an
+equality expression. An interval expression is in the form:
+
+```
+a-b
+```
+
+Where `a` can be any character literal and `b` can be any character literal
+greater than `a`. If `b` is not greater than `a`, an error is emitted.
+
+Equality sub-expressions are just a single character literal. The only special
+case is the character `-`, which must be the last character literal in the
+character class for it to be matched as a single character.
+
+Finally, a character class can contain any number of sub-expressions. The
+sub-expressions are tested in the order that they appear in.
+
+Here are some examples of valid character class expressions.
+
+```
+NonDigit <- [a-zA-Z_]
+
+Digit <- [0-9]
+
+PlusOrMinus <- [+-]
+
+CapitalAWithTopGlyph <- [À-Å]
+```
+
 ### Dot
 
 ### String Literal
@@ -45,6 +76,10 @@ Here are some examples of valid string literals.
 "example \"5\""
 'example \'6\''
 ```
+
+There is no difference between using `'` and `"`, it's entirely a matter of
+preference. You may prefer to use double quotes when the body of the string
+literal contains single quotes (and vice versa).
 
 ### Reference
 
