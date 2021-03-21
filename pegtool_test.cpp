@@ -112,8 +112,8 @@ main()
     }
   }
 
-  if (fileExists("expected_err.txt")) {
-    if (!verifyDiagnosticOutput(grammar, "expected_err.txt"))
+  if (fileExists("expected_diagnostics.txt")) {
+    if (!verifyDiagnosticOutput(grammar, "expected_diagnostics.txt"))
       return EXIT_FAILURE;
   } else {
     if (grammar.hasDiagnostics()) {
