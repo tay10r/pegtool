@@ -180,13 +180,27 @@ diagnosticsToString(const peg::Grammar& grammar)
   return errStream.str();
 }
 
+size_t
+getColumnCount(const std::string& str)
+{
+  size_t count = 0;
+
+  for (const auto& c : str) {
+    if ((c & 0xc0) == 0x80)
+      continue;
+    count++;
+  }
+
+  return count;
+}
+
 std::size_t
 getMaxColumnCount(const std::vector<std::string>& lineVec)
 {
   size_t maxColCount = 0;
 
   for (const auto& s : lineVec)
-    maxColCount = std::max(maxColCount, s.size());
+    maxColCount = std::max(maxColCount, getColumnCount(s));
 
   return maxColCount;
 }
@@ -208,7 +222,7 @@ printStringComparison(const std::string& a, const std::string& b)
     if (i < aLines.size()) {
       std::cout << aLines[i];
 
-      size_t remainingCols = maxColCount - aLines[i].size();
+      size_t remainingCols = maxColCount - getColumnCount(aLines[i]);
 
       for (size_t i = 0; i < remainingCols; i++)
         std::cout << ' ';

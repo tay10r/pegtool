@@ -10,7 +10,7 @@ files.
 
 ```cpp
 const char grammarSpec[] = R"(
-Example <- Foo Bar
+Example <- Foo Space Bar
 Foo <- 'foo'
 Bar <- 'bar'
 Space <- [ \t]

@@ -28,6 +28,79 @@ class GrammarParser;
 
 } // namespace
 
+// {{{ UTF-8
+//==========
+
+namespace {
+
+using UChar = unsigned char;
+
+/// @return The number of bytes that successfully match a UTF-8 sequence.
+size_t
+utf8Length(UChar prefixByte)
+{
+  // branchless utf-8
+
+  // Taken from https://nullprogram.com/blog/2017/10/06
+
+  static const UChar lengths[]{
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 3, 3, 4, 0
+  };
+
+  UChar len = lengths[prefixByte >> 3];
+
+  return len + !len;
+}
+
+size_t
+getUtf8ValidLength(const char* basePtr, size_t offset, size_t baseLen)
+{
+  if (offset >= baseLen)
+    return 0;
+
+  auto len = utf8Length(UChar(basePtr[offset]));
+
+  for (size_t i = 1; (i < len) && ((offset + i) < baseLen); i++) {
+    if ((basePtr[offset + i] & 0xc0) != 0x80)
+      return i;
+  }
+
+  return len;
+}
+
+/// @return False if the UTF-32 character is not valid Unicode.
+bool
+convertUtf32To8(char32_t in, std::string& out)
+{
+  // See section 3 of RFC 3629 on "UTF-8 definition"
+
+  if (in <= 0x7f) {
+    out.push_back(static_cast<char>(in));
+  } else if ((in >= 0x80) && (in <= 0x7ff)) {
+    out.push_back(static_cast<char>((in >> 6) & 0x1f) | 0xc0);
+    out.push_back(static_cast<char>((in >> 0) & 0x3f) | 0x80);
+  } else if ((in >= 0x800) && (in <= 0xffff)) {
+    out.push_back(static_cast<char>(((in >> 0x0c) & 0x0f) | 0xe0));
+    out.push_back(static_cast<char>(((in >> 0x06) & 0x3f) | 0x80));
+    out.push_back(static_cast<char>(((in >> 0x00) & 0x3f) | 0x80));
+  } else if ((in >= 0x10000) && (in <= 0x10ffff)) {
+    out.push_back(static_cast<char>(((in >> 0x12) & 0x03) | 0xf0));
+    out.push_back(static_cast<char>(((in >> 0x0c) & 0x3f) | 0x80));
+    out.push_back(static_cast<char>(((in >> 0x06) & 0x3f) | 0x80));
+    out.push_back(static_cast<char>(((in >> 0x00) & 0x3f) | 0x80));
+  } else {
+    return false;
+  }
+
+  return true;
+}
+
+} // namespace
+
+//==========
+// }}} UTF-8
+
 // {{{ Position
 //=============
 
@@ -62,6 +135,23 @@ namespace {
 class Token final
 {
 public:
+  static Token makeUnion(const Token& a, const Token& b)
+  {
+    Token out;
+
+    if (a.data < b.data) {
+      out.data = a.data;
+      out.size = (b.data - a.data) + b.size;
+      out.start = a.start;
+    } else {
+      out.data = b.data;
+      out.size = (a.data - b.data) + a.size;
+      out.start = b.start;
+    }
+
+    return out;
+  }
+
   Token() = default;
 
   Token(const char* d, size_t s, const Position& p)
@@ -480,8 +570,25 @@ Diagnostic::print(std::ostream& stream) const
 
   stream << " " << this->start.ln << " | ";
 
-  for (size_t i = 0; i < this->lnSize; i++)
-    stream << this->lnPtr[i];
+  for (size_t i = 0; i < this->lnSize; i++) {
+
+    auto symLength = utf8Length(this->lnPtr[i]);
+
+    auto validLength = getUtf8ValidLength(this->lnPtr, i, this->lnSize);
+
+    if (!validLength)
+      break;
+
+    if (validLength != symLength) {
+      stream << "\ufffd";
+    } else {
+      for (size_t j = 0; j < symLength; j++) {
+        stream << this->lnPtr[i + j];
+      }
+    }
+
+    i += validLength - 1; // -1 because we're in a for-loop
+  }
 
   stream << std::endl;
 
@@ -490,8 +597,17 @@ Diagnostic::print(std::ostream& stream) const
   for (size_t i = this->lnOffset; i < this->start.idx; i++)
     stream << ((this->lnPtr[i - this->lnOffset] == '\t') ? '\t' : ' ');
 
-  for (size_t i = 0; i < len; i++)
+  for (size_t i = 0; i < len; i++) {
+
+    auto symLength = utf8Length(this->lnPtr[this->start.idx + i]);
+
+    if (!symLength)
+      break;
+
     stream << '~';
+
+    i += symLength - 1;
+  }
 
   stream << std::endl;
 }
@@ -551,53 +667,6 @@ isHexDigit(char c) noexcept
   return isDigit(c) || inRange<'a', 'f'>(toLower(c));
 }
 
-using UChar = unsigned char;
-
-/// @return The number of bytes that successfully match a UTF-8 sequence.
-size_t
-utf8Length(UChar prefixByte)
-{
-  // branchless utf-8
-
-  // Taken from https://nullprogram.com/blog/2017/10/06
-
-  static const UChar lengths[]{
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 3, 3, 4, 0
-  };
-
-  UChar len = lengths[prefixByte >> 3];
-
-  return len + !len;
-}
-
-/// @return False if the UTF-32 character is not valid Unicode.
-bool
-convertUtf32To8(char32_t in, std::string& out)
-{
-  // See section 3 of RFC 3629 on "UTF-8 definition"
-
-  if (in <= 0x7f) {
-    out.push_back(static_cast<char>(in));
-  } else if ((in >= 0x80) && (in <= 0x7ff)) {
-    out.push_back(static_cast<char>((in >> 6) & 0x1f) | 0xc0);
-    out.push_back(static_cast<char>((in >> 0) & 0x3f) | 0x80);
-  } else if ((in >= 0x800) && (in <= 0xffff)) {
-    out.push_back(static_cast<char>(((in >> 0x0c) & 0x0f) | 0xe0));
-    out.push_back(static_cast<char>(((in >> 0x06) & 0x3f) | 0x80));
-    out.push_back(static_cast<char>(((in >> 0x00) & 0x3f) | 0x80));
-  } else if ((in >= 0x10000) && (in <= 0x10ffff)) {
-    out.push_back(static_cast<char>(((in >> 0x12) & 0x03) | 0xf0));
-    out.push_back(static_cast<char>(((in >> 0x0c) & 0x3f) | 0x80));
-    out.push_back(static_cast<char>(((in >> 0x06) & 0x3f) | 0x80));
-    out.push_back(static_cast<char>(((in >> 0x00) & 0x3f) | 0x80));
-  } else {
-    return false;
-  }
-
-  return true;
-}
-
 size_t
 getHexSequenceLength(const CharCursor& cursor, size_t startingOffset)
 {
@@ -617,12 +686,52 @@ enum class CharErr
 {
   None,
   InvalidCodePoint,
+  InvalidEscapeSequence,
+  InvalidUtfSequence,
   IncompleteCodePoint16,
-  IncompleteCodePoint32,
-  InvalidEscapeSequence
+  IncompleteCodePoint32
 };
 
-/// This function gets a character litearl value from the cursor at a given
+void
+fillReplacementChar(std::string& str)
+{
+  str = "\uffdd";
+}
+
+size_t
+getUtf8Char(const CharCursor& cursor,
+            std::string& str,
+            size_t offset,
+            CharErr& err)
+{
+  err = CharErr::None;
+
+  if (cursor.outOfBounds(offset))
+    return 0;
+
+  auto prefixByte = cursor.peek(offset);
+
+  str.push_back(prefixByte);
+
+  auto len = utf8Length(prefixByte);
+
+  for (size_t i = 1; i < len; i++) {
+
+    auto continuationByte = cursor.peek(offset + i);
+
+    if ((continuationByte & 0xc0) != 0x80) {
+      err = CharErr::InvalidUtfSequence;
+      fillReplacementChar(str);
+      return len;
+    }
+
+    str.push_back(continuationByte);
+  }
+
+  return len;
+}
+
+/// This function gets a character literal value from the cursor at a given
 /// offset, putting the character at the end of the string container passed
 /// in the parameter list.
 ///
@@ -635,11 +744,8 @@ getChar(const CharCursor& cursor, std::string& str, size_t offset, CharErr& err)
   if (cursor.outOfBounds(offset))
     return 0;
 
-  if (cursor.peek(offset) != '\\') {
-    // TODO : handle UTF-8
-    str.push_back(cursor.peek(offset));
-    return 1;
-  }
+  if (cursor.peek(offset) != '\\')
+    return getUtf8Char(cursor, str, offset, err);
 
   if (cursor.outOfBounds(offset + 1)) {
     // TODO
@@ -1512,6 +1618,9 @@ private:
         case CharErr::InvalidEscapeSequence:
           errStream << "This is not a recognized escape sequence.";
           break;
+        case CharErr::InvalidUtfSequence:
+          errStream << "This UTF sequence is invalid.";
+          break;
       }
     });
 
@@ -1645,11 +1754,63 @@ private:
     return UniqueExprPtr(new ReferenceExpr(token));
   }
 
+  void checkEmptyClassExpr(bool& errFlag)
+  {
+    if ((this->cursor.peek(0) != '[') || (this->cursor.peek(1) != ']'))
+      return;
+
+    errFlag = true;
+
+    Token token;
+
+    this->produce(token, 2);
+
+    this->formatErr(token, [](std::ostream& stream) {
+      stream << "Character classes cannot be empty.";
+    });
+  }
+
+  void checkClassInterval(const CharLiteral& a,
+                          const CharLiteral& b,
+                          bool& errFlag)
+  {
+    const auto& aTok = a.getToken();
+    const auto& bTok = b.getToken();
+
+    const auto& aData = a.getData();
+    const auto& bData = b.getData();
+
+    if (aData == bData) {
+      // TODO
+    }
+
+    if (aData > bData) {
+
+      this->formatErr(Token::makeUnion(aTok, bTok), [](std::ostream& stream) {
+        stream << "Character range is out of order.";
+      });
+
+      errFlag = true;
+
+      return;
+    }
+  }
+
   UniqueExprPtr parseClassExpr(bool& errFlag)
   {
+    checkEmptyClassExpr(errFlag);
+
+    if (errFlag)
+      return nullptr;
+
     Token leftBracket;
 
-    if (!this->parseExactly(leftBracket, "["))
+    bool skipUnused = false;
+
+    if (!this->parseExactly(leftBracket, "[", skipUnused))
+      return nullptr;
+
+    if (errFlag)
       return nullptr;
 
     using EqualityExpr = ClassExpr::EqualitySubExpr;
@@ -1666,8 +1827,11 @@ private:
       } else if (this->cursor.peek(0) == ']') {
 
         if (!bracketBalance) {
+
           Token rightToken;
+
           this->produce(rightToken, 1);
+
           return UniqueExprPtr(classExpr.release());
         }
 
@@ -1680,14 +1844,15 @@ private:
 
       if (!this->parseCharLiteral(first, charErr)) {
 
-        if (charErr != CharErr::None)
+        if (charErr != CharErr::None) {
+          errFlag = true;
           return nullptr;
+        }
 
         break;
       }
 
       if (this->cursor.peek(0) != '-') {
-        this->cursor.next(1);
         classExpr->appendSubExpr(new EqualityExpr(std::move(first)));
         continue;
       }
@@ -1699,13 +1864,23 @@ private:
       CharLiteral second;
 
       if (this->parseCharLiteral(second, charErr)) {
+
+        checkClassInterval(first, second, errFlag);
+
+        if (errFlag)
+          return nullptr;
+
         using I = IntervalExpr;
+
         classExpr->appendSubExpr(new I(std::move(first), std::move(second)));
+
         continue;
       }
 
-      if (charErr != CharErr::None)
+      if (charErr != CharErr::None) {
+        errFlag = true;
         return nullptr;
+      }
 
       classExpr->appendSubExpr(new EqualityExpr(std::move(first)));
 
@@ -1780,7 +1955,7 @@ private:
     return true;
   }
 
-  bool parseExactly(Token& token, const char* expected)
+  bool parseExactly(Token& token, const char* expected, bool skipUnused = true)
   {
     size_t len = 0;
 
@@ -1789,7 +1964,7 @@ private:
       auto expectedChar = expected[len];
 
       if (!expectedChar)
-        return produce(token, len);
+        return produce(token, len, skipUnused);
 
       if (this->cursor.peek(len) != expectedChar)
         break;
@@ -1800,7 +1975,9 @@ private:
     return false;
   }
 
-  bool parseCharLiteral(CharLiteral& literal, CharErr& err)
+  bool parseCharLiteral(CharLiteral& literal,
+                        CharErr& err,
+                        bool skipUnused = false)
   {
     err = CharErr::None;
 
@@ -1810,7 +1987,7 @@ private:
 
     Token token;
 
-    this->produce(token, len);
+    this->produce(token, len, skipUnused);
 
     if (err != CharErr::None)
       return formatCharErr(token, err);
@@ -1842,13 +2019,14 @@ private:
     return this->produce(token, len);
   }
 
-  bool produce(Token& token, size_t len)
+  bool produce(Token& token, size_t len, bool skipUnused = true)
   {
     token = Token(this->cursor.getOffsetPtr(), len, this->getPosition());
 
     this->cursor.next(len);
 
-    this->cursor.skipUnused();
+    if (skipUnused)
+      this->cursor.skipUnused();
 
     return true;
   }

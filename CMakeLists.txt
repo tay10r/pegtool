@@ -29,6 +29,8 @@ if(PEGTOOL_TESTS)
     literal_expr
     literal_expr_2
     literal_expr_3
+    literal_expr_4
+    literal_expr_4_fail
     literal_expr_lf
     literal_expr_cr
     literal_expr_tab
@@ -74,7 +76,15 @@ if(PEGTOOL_TESTS)
     invalid_escape_sequence_diag
     character_class
     character_class_fail
-    character_class_missing_right_bracket_diag)
+    character_class_2
+    character_class_2_fail
+    character_class_3
+    character_class_3_fail
+    character_class_missing_right_bracket_diag
+    character_class_empty_diag
+    character_class_out_of_order_diag
+    character_class_invalid_utf_sequence_diag
+    character_class_invalid_utf_sequence_diag_2)
 
   foreach (test ${tests})
 
