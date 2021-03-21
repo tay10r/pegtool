@@ -1135,6 +1135,8 @@ public:
     Not
   };
 
+  using TokenKindPair = std::pair<Token, Kind>;
+
   bool accept(ExprVisitor& v) const override { return v.visit(*this); }
 
   bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
@@ -1149,8 +1151,12 @@ public:
     return v.visit(this->suffixExpr);
   }
 
+  Kind getKind() const noexcept { return this->tokenKindPair.second; }
+
 private:
   friend GrammarParser;
+
+  TokenKindPair tokenKindPair = { Token(), Kind::None };
 
   SuffixExpr suffixExpr;
 };
@@ -1427,6 +1433,8 @@ public:
     , length(l)
   {}
 
+  ErrorImpl(const ErrorImpl&) = default;
+
   const char* getMessage() const noexcept override { return message.c_str(); }
 
   size_t getMessageLength() const noexcept override { return message.size(); }
@@ -1464,6 +1472,21 @@ public:
   NodeImpl(std::string&& n)
     : name(std::move(n))
   {}
+
+  NodeImpl(NodeImpl&&) = default;
+
+  NodeImpl(const NodeImpl& other)
+    : name(other.name)
+  {
+    for (const auto& leaf : other.leafs)
+      this->leafs.emplace_back(leaf);
+
+    for (const auto& child : other.children)
+      this->children.emplace_back(new NodeImpl(*child));
+
+    for (const auto& error : other.errors)
+      this->errors.emplace_back(error);
+  }
 
   void appendLeaf(Leaf&& leafNode)
   {
@@ -1520,7 +1543,7 @@ private:
 
   std::string name;
   std::vector<Leaf> leafs;
-  std::vector<Error> errors;
+  std::vector<ErrorImpl> errors;
   std::vector<std::unique_ptr<NodeImpl>> children;
 };
 
@@ -1993,6 +2016,13 @@ private:
 
   bool parsePrefixExpr(PrefixExpr& prefixExpr, bool& errFlag)
   {
+    if (this->parseExactly(prefixExpr.tokenKindPair.first, "&"))
+      prefixExpr.tokenKindPair.second = PrefixExpr::Kind::And;
+    else if (this->parseExactly(prefixExpr.tokenKindPair.first, "!"))
+      prefixExpr.tokenKindPair.second = PrefixExpr::Kind::Not;
+    else
+      prefixExpr.tokenKindPair.second = PrefixExpr::Kind::None;
+
     return parseSuffixExpr(prefixExpr.suffixExpr, errFlag);
   }
 
@@ -2622,14 +2652,14 @@ public:
     return slashExpr.acceptSequenceVisitor(0, *this);
   }
 
-  template<typename ExprParser>
-  bool matchExprRange(ExprParser exprParser, size_t min, size_t max)
+  template<typename ExprInterpreter>
+  bool matchExprRange(ExprInterpreter interpreter, size_t min, size_t max)
   {
     size_t matchCount = 0;
 
     while (matchCount < max) {
 
-      auto match = exprParser();
+      auto match = interpreter();
 
       static_assert(std::is_same<decltype(match), bool>::value,
                     "Expression parser must return a boolean type");
@@ -2645,7 +2675,7 @@ public:
 
   bool visit(const SuffixExpr& suffixExpr) override
   {
-    auto exprParser = [this, &suffixExpr]() -> bool {
+    auto interpreter = [this, &suffixExpr]() -> bool {
       return suffixExpr.acceptPrimaryExprVisitor(*this);
     };
 
@@ -2653,20 +2683,45 @@ public:
 
     switch (suffixExpr.getKind()) {
       case SuffixExpr::Kind::None:
-        return matchExprRange(exprParser, 1, 1);
+        return matchExprRange(interpreter, 1, 1);
       case SuffixExpr::Kind::Question:
-        return matchExprRange(exprParser, 0, 1);
+        return matchExprRange(interpreter, 0, 1);
       case SuffixExpr::Kind::Star:
-        return matchExprRange(exprParser, 0, exprMax);
+        return matchExprRange(interpreter, 0, exprMax);
       case SuffixExpr::Kind::Plus:
-        return matchExprRange(exprParser, 1, exprMax);
+        return matchExprRange(interpreter, 1, exprMax);
     }
 
     return false;
   }
 
+  template<typename ExprInterpreter>
+  bool evalPredicate(ExprInterpreter interpreter)
+  {
+    this->pushState();
+
+    auto result = interpreter();
+
+    this->restoreLastState();
+
+    return result;
+  }
+
   bool visit(const PrefixExpr& prefixExpr) override
   {
+    auto interpreter = [this, &prefixExpr]() -> bool {
+      return prefixExpr.acceptSuffixExprVisitor(*this);
+    };
+
+    switch (prefixExpr.getKind()) {
+      case PrefixExpr::Kind::And:
+        return evalPredicate(interpreter);
+      case PrefixExpr::Kind::Not:
+        return !evalPredicate(interpreter);
+      case PrefixExpr::Kind::None:
+        break;
+    }
+
     return prefixExpr.acceptSuffixExprVisitor(*this);
   }
 
@@ -2706,20 +2761,32 @@ private:
     State state;
     state.inputOffset = this->inputOffset;
     state.nonTerminalCount = this->branchStack.size();
-    this->stateStack.push_back(state);
+
+    if (this->branchStack.size() > 0)
+      state.currentNode.reset(new NodeImpl(*this->branchStack.back()));
+
+    this->stateStack.push_back(std::move(state));
   }
 
   void restoreLastState()
   {
     assert(this->stateStack.size() > 0);
 
-    auto state = this->stateStack.back();
+    auto state = std::move(this->stateStack.back());
 
     this->stateStack.pop_back();
 
     this->inputOffset = state.inputOffset;
 
     this->branchStack.resize(state.nonTerminalCount);
+
+    if (state.currentNode) {
+
+      assert(this->branchStack.size() > 0);
+
+      if (this->branchStack.size() > 0)
+        this->branchStack.back().reset(state.currentNode.release());
+    }
   }
 
   void discardLastState()
@@ -2792,6 +2859,7 @@ private:
   {
     size_t inputOffset = 0;
     size_t nonTerminalCount = 0;
+    std::unique_ptr<NodeImpl> currentNode;
   };
 
   std::vector<State> stateStack;
