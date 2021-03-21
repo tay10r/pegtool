@@ -12,5 +12,5 @@ compiler:
 script:
   - mkdir build && cd build
   - cmake .. -DCMAKE_BUILD_TYPE=Release -DPEGTOOL_TESTS=1
-  - cmake --build .
+  - cmake --build . --config Release
   - ctest -C Release
