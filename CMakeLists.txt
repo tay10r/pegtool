@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.9.6)
 project(pegtool)
 
 option(PEGTOOL_TESTS "Whether or not to build the unit tests.")
+option(PEGTOOL_VALGRIND "Whether or not to use valgrind for testing (if found.)" ON)
 
 if(NOT MSVC)
   set(cxxflags -Wall -Wextra -Werror -Wfatal-errors -std=c++11)
@@ -15,6 +16,8 @@ target_compile_options(peg PRIVATE ${cxxflags})
 target_include_directories(peg PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
 if(PEGTOOL_TESTS)
+
+  find_program(VALGRIND_EXECUTABLE valgrind)
 
   add_executable(peg_test pegtool_test.cpp)
 
@@ -96,8 +99,14 @@ if(PEGTOOL_TESTS)
 
   foreach (test ${tests})
 
+    set(VALGRIND_CMD)
+
+    if (VALGRIND_EXECUTABLE AND PEGTOOL_VALGRIND)
+      set(VALGRIND_CMD ${VALGRIND_EXECUTABLE} --error-exitcode=1)
+    endif (VALGRIND_EXECUTABLE AND PEGTOOL_VALGRIND)
+
     add_test(NAME PegTest:${test}
-      COMMAND $<TARGET_FILE:peg_test>
+      COMMAND ${VALGRIND_CMD} $<TARGET_FILE:peg_test>
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests/${test}")
 
   endforeach (test ${tests})
