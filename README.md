@@ -13,7 +13,7 @@ const char grammarSpec[] = R"(
 Example <- Foo Space Bar
 Foo <- 'foo'
 Bar <- 'bar'
-Space <- [ \t]
+Space <- [ \t]+
 )";
 
 peg::Grammar grammar(grammarSpec);
