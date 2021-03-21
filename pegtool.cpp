@@ -1856,7 +1856,8 @@ private:
         break;
       }
 
-      if (this->cursor.peek(0) != '-') {
+      if ((this->cursor.peek(0) != '-') ||
+          ((this->cursor.peek(1) == ']') && !bracketBalance)) {
         classExpr->appendSubExpr(new EqualityExpr(std::move(first)));
         continue;
       }

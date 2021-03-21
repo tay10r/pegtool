@@ -85,6 +85,9 @@ if(PEGTOOL_TESTS)
     character_class_out_of_order_diag
     character_class_invalid_utf_sequence_diag
     character_class_invalid_utf_sequence_diag_2
+    character_class_trailing_dash
+    character_class_trailing_dash_2
+    character_class_trailing_dash_fail
     question_expr
     question_expr_2
     question_expr_3
