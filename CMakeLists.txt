@@ -84,7 +84,12 @@ if(PEGTOOL_TESTS)
     character_class_empty_diag
     character_class_out_of_order_diag
     character_class_invalid_utf_sequence_diag
-    character_class_invalid_utf_sequence_diag_2)
+    character_class_invalid_utf_sequence_diag_2
+    question_expr
+    question_expr_2
+    question_expr_3
+    question_expr_fail
+    question_expr_fail_2)
 
   foreach (test ${tests})
 

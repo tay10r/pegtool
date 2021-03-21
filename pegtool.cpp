@@ -1091,6 +1091,8 @@ public:
     Plus
   };
 
+  using TokenKindPair = std::pair<Token, Kind>;
+
   bool accept(ExprVisitor& v) const override { return v.visit(*this); }
 
   bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
@@ -1111,12 +1113,12 @@ public:
       return false;
   }
 
-  Kind getKind() const noexcept { return this->kind; }
+  Kind getKind() const noexcept { return this->tokenKindPair.second; }
 
 private:
   friend GrammarParser;
 
-  Kind kind = Kind::None;
+  TokenKindPair tokenKindPair;
 
   UniqueExprPtr primaryExpr;
 };
@@ -1823,7 +1825,9 @@ private:
     while (!this->cursor.atEnd()) {
 
       if (this->cursor.peek(0) == '[') {
+
         bracketBalance++;
+
       } else if (this->cursor.peek(0) == ']') {
 
         if (!bracketBalance) {
@@ -1923,6 +1927,13 @@ private:
   bool parseSuffixExpr(SuffixExpr& suffixExpr, bool& errFlag)
   {
     suffixExpr.primaryExpr = parsePrimaryExpr(errFlag);
+
+    Token suffixToken;
+
+    if (this->parseExactly(suffixToken, "?")) {
+      suffixExpr.tokenKindPair.second = SuffixExpr::Kind::Question;
+      suffixExpr.tokenKindPair.first = suffixToken;
+    }
 
     return !!suffixExpr.primaryExpr;
   }
