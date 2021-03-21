@@ -2578,9 +2578,47 @@ public:
     return slashExpr.acceptSequenceVisitor(0, *this);
   }
 
+  template<typename ExprParser>
+  bool matchExprRange(ExprParser exprParser, size_t min, size_t max)
+  {
+    size_t matchCount = 0;
+
+    while (matchCount < max) {
+
+      auto match = exprParser();
+
+      static_assert(std::is_same<decltype(match), bool>::value,
+                    "Expression parser must return a boolean type");
+
+      if (!match)
+        break;
+
+      matchCount++;
+    }
+
+    return matchCount >= min;
+  }
+
   bool visit(const SuffixExpr& suffixExpr) override
   {
-    return suffixExpr.acceptPrimaryExprVisitor(*this);
+    auto exprParser = [this, &suffixExpr]() -> bool {
+      return suffixExpr.acceptPrimaryExprVisitor(*this);
+    };
+
+    auto exprMax = std::numeric_limits<size_t>::max();
+
+    switch (suffixExpr.getKind()) {
+      case SuffixExpr::Kind::None:
+        return matchExprRange(exprParser, 1, 1);
+      case SuffixExpr::Kind::Question:
+        return matchExprRange(exprParser, 0, 1);
+      case SuffixExpr::Kind::Star:
+        return matchExprRange(exprParser, 0, exprMax);
+      case SuffixExpr::Kind::Plus:
+        return matchExprRange(exprParser, 1, exprMax);
+    }
+
+    return false;
   }
 
   bool visit(const PrefixExpr& prefixExpr) override
