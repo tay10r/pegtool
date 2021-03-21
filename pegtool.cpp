@@ -1983,6 +1983,9 @@ private:
     } else if (this->parseExactly(suffixToken, "*")) {
       suffixExpr.tokenKindPair.second = SuffixExpr::Kind::Star;
       suffixExpr.tokenKindPair.first = suffixToken;
+    } else if (this->parseExactly(suffixToken, "+")) {
+      suffixExpr.tokenKindPair.second = SuffixExpr::Kind::Plus;
+      suffixExpr.tokenKindPair.first = suffixToken;
     }
 
     return !!suffixExpr.primaryExpr;
@@ -2576,29 +2579,21 @@ public:
 
   bool visit(const ClassExpr& classExpr) override
   {
-    size_t offset = 0;
+    auto utf8Char = this->getUtf8CharAt(0);
 
-    while (offset < this->remaining()) {
-
-      auto utf8Char = this->getUtf8CharAt(offset);
-
-      if (!utf8Char.size())
-        break;
-
-      size_t utf8CharLength = utf8Char.size();
-
-      ClassExprParser classExprParser(std::move(utf8Char));
-
-      if (!classExpr.acceptSubExprVisitor(classExprParser))
-        break;
-
-      offset += utf8CharLength;
-    }
-
-    if (!offset)
+    if (!utf8Char.size())
       return false;
 
-    this->produceLeaf(offset);
+    size_t utf8CharLength = utf8Char.size();
+
+    // TODO : Check for error in input string.
+
+    ClassExprParser classExprParser(std::move(utf8Char));
+
+    if (!classExpr.acceptSubExprVisitor(classExprParser))
+      return false;
+
+    this->produceLeaf(utf8CharLength);
 
     return true;
   }
