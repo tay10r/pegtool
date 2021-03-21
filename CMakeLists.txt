@@ -95,7 +95,10 @@ if(PEGTOOL_TESTS)
     question_expr_2
     question_expr_3
     question_expr_fail
-    question_expr_fail_2)
+    question_expr_fail_2
+    star_expr
+    star_expr_2
+    star_expr_3)
 
   foreach (test ${tests})
 
