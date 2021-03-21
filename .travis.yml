@@ -3,6 +3,7 @@ language: cpp
 os:
   - linux
   - osx
+  - windows
 
 compiler:
   - gcc
@@ -11,5 +12,5 @@ compiler:
 script:
   - mkdir build && cd build
   - cmake .. -DCMAKE_BUILD_TYPE=Release -DPEGTOOL_TESTS=1
-  - make
-  - make test
+  - cmake --build .
+  - ctest
