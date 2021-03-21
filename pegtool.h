@@ -104,10 +104,33 @@ private:
   size_t length = 0;
 };
 
+/// This is a special type of leaf node that indicates an error and contains
+/// a message that describes the error.
+class Error
+{
+public:
+  virtual ~Error() = default;
+
+  /// @note The string returned here is null-terminated.
+  virtual const char* getMessage() const noexcept = 0;
+
+  virtual size_t getMessageLength() const noexcept = 0;
+
+  /// @note The string returned here is not null-terminated. It is part of the
+  /// same string data passed to the parser.
+  virtual const char* getData() const noexcept = 0;
+
+  virtual size_t getLength() const noexcept = 0;
+};
+
 class Node
 {
 public:
   virtual ~Node() = default;
+
+  virtual size_t getErrorCount() const noexcept = 0;
+
+  virtual const Error& getError(size_t index) const noexcept = 0;
 
   virtual size_t getLeafCount() const noexcept = 0;
 

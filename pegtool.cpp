@@ -1410,6 +1410,39 @@ private:
 
 namespace {
 
+class ErrorImpl final : public Error
+{
+public:
+  static const ErrorImpl& null()
+  {
+    static ErrorImpl err;
+    return err;
+  }
+
+  ErrorImpl(std::string&& m, const char* d, size_t l)
+    : message(std::move(m))
+    , data(d)
+    , length(l)
+  {}
+
+  const char* getMessage() const noexcept override { return message.c_str(); }
+
+  size_t getMessageLength() const noexcept override { return message.size(); }
+
+  const char* getData() const noexcept override { return data; }
+
+  size_t getLength() const noexcept override { return length; }
+
+private:
+  ErrorImpl() = default;
+
+  std::string message;
+
+  const char* data = nullptr;
+
+  size_t length = 0;
+};
+
 const Leaf&
 nullLeaf()
 {
@@ -1439,6 +1472,16 @@ public:
   {
     this->children.emplace_back(std::move(child));
   }
+
+  const Error& getError(size_t index) const noexcept override
+  {
+    if (index >= this->errors.size())
+      return ErrorImpl::null();
+    else
+      return this->errors[index];
+  }
+
+  size_t getErrorCount() const noexcept override { return this->errors.size(); }
 
   const Leaf& getLeaf(size_t index) const noexcept override
   {
@@ -1475,6 +1518,7 @@ private:
 
   std::string name;
   std::vector<Leaf> leafs;
+  std::vector<Error> errors;
   std::vector<std::unique_ptr<NodeImpl>> children;
 };
 
