@@ -580,7 +580,7 @@ Diagnostic::print(std::ostream& stream) const
       break;
 
     if (validLength != symLength) {
-      stream << "\ufffd";
+      stream << "\xef\xbf\xbd";
     } else {
       for (size_t j = 0; j < symLength; j++) {
         stream << this->lnPtr[i + j];
@@ -599,7 +599,9 @@ Diagnostic::print(std::ostream& stream) const
 
   for (size_t i = 0; i < len; i++) {
 
-    auto symLength = utf8Length(this->lnPtr[this->start.idx + i]);
+    size_t symLnOffset = (this->start.idx + i) - this->lnOffset;
+
+    auto symLength = getUtf8ValidLength(this->lnPtr, symLnOffset, this->lnSize);
 
     if (!symLength)
       break;
@@ -695,7 +697,7 @@ enum class CharErr
 void
 fillReplacementChar(std::string& str)
 {
-  str = "\uffdd";
+  str = "\xef\xbf\xbd";
 }
 
 size_t
@@ -722,7 +724,7 @@ getUtf8Char(const CharCursor& cursor,
     if ((continuationByte & 0xc0) != 0x80) {
       err = CharErr::InvalidUtfSequence;
       fillReplacementChar(str);
-      return len;
+      return i;
     }
 
     str.push_back(continuationByte);
