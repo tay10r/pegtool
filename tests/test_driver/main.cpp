@@ -84,6 +84,8 @@ main(int argc, char** argv)
 
       if (!registerTestList(testPaths, argv[++i]))
         return EXIT_FAILURE;
+
+      continue;
     }
 
     if (argv[i][0] == '-') {

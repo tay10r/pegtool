@@ -1980,6 +1980,9 @@ private:
     if (this->parseExactly(suffixToken, "?")) {
       suffixExpr.tokenKindPair.second = SuffixExpr::Kind::Question;
       suffixExpr.tokenKindPair.first = suffixToken;
+    } else if (this->parseExactly(suffixToken, "*")) {
+      suffixExpr.tokenKindPair.second = SuffixExpr::Kind::Star;
+      suffixExpr.tokenKindPair.first = suffixToken;
     }
 
     return !!suffixExpr.primaryExpr;
