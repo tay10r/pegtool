@@ -1,0 +1,6 @@
+grammar.peg:1:9: warning: Grouping expression is empty.
+ 1 | Root <- (
+   |         ~
+grammar.peg:2:11: note: End of grouping expression is here.
+ 2 |           )
+   |           ~

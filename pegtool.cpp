@@ -1082,6 +1082,41 @@ private:
   std::vector<std::unique_ptr<SubExpr>> subExprs;
 };
 
+class GroupExpr final : public Expr
+{
+public:
+  bool accept(ExprVisitor& v) const override { return v.visit(*this); }
+
+  bool acceptMutator(const ExprMutator& m) override { return m.mutate(*this); }
+
+  bool acceptInnerExprVisitor(ExprVisitor& v) const
+  {
+    assert(!!this->innerExpr);
+
+    if (this->innerExpr)
+      return this->innerExpr->accept(v);
+    else
+      return false;
+  }
+
+  bool acceptInnerExprMutator(const ExprMutator& m)
+  {
+    assert(!!this->innerExpr);
+
+    if (this->innerExpr)
+      this->innerExpr->acceptMutator(m);
+    else
+      return false;
+  }
+
+private:
+  friend GrammarParser;
+
+  Token leftParen;
+  Token rightParen;
+  std::unique_ptr<Expr> innerExpr;
+};
+
 class SuffixExpr final : public Expr
 {
 public:
@@ -1970,6 +2005,54 @@ private:
     return classExpr;
   }
 
+  UniqueExprPtr parseGroupExpr(bool& errFlag)
+  {
+    Token leftParen;
+
+    if (!this->parseExactly(leftParen, "("))
+      return nullptr;
+
+    auto groupExpr = std::unique_ptr<GroupExpr>(new GroupExpr());
+
+    groupExpr->leftParen = leftParen;
+
+    std::unique_ptr<SlashExpr> innerExpr(new SlashExpr());
+
+    if (!parseExpr(*innerExpr, errFlag)) {
+      if (errFlag)
+        return nullptr;
+
+      this->formatErr(leftParen, [](std::ostream& errStream) {
+        errStream << "Expected an expression after this.";
+      });
+
+      errFlag = true;
+
+      return nullptr;
+    }
+
+    groupExpr->innerExpr = UniqueExprPtr(innerExpr.release());
+
+    Token rightParen;
+
+    if (!this->parseExactly(rightParen, ")")) {
+
+      errFlag = true;
+
+      auto formatter = [](std::ostream& errStream) {
+        errStream << "Missing ')'";
+      };
+
+      this->formatErr(leftParen, formatter);
+
+      return UniqueExprPtr(groupExpr.release());
+    }
+
+    groupExpr->rightParen = rightParen;
+
+    return UniqueExprPtr(groupExpr.release());
+  }
+
   UniqueExprPtr parsePrimaryExpr(bool& errFlag)
   {
     auto literalExpr = parseLiteralExpr(errFlag);
@@ -1990,6 +2073,13 @@ private:
     auto classExpr = parseClassExpr(errFlag);
     if (classExpr)
       return classExpr;
+
+    if (errFlag)
+      return nullptr;
+
+    auto groupExpr = parseGroupExpr(errFlag);
+    if (groupExpr)
+      return groupExpr;
 
     return nullptr;
   }
@@ -2565,7 +2655,19 @@ public:
     return true;
   }
 
-  bool visit(const GroupExpr&) override { return false; }
+  bool visit(const GroupExpr& groupExpr) override
+  {
+    this->pushState();
+
+    auto success = groupExpr.acceptInnerExprVisitor(*this);
+
+    if (!success)
+      this->restoreLastState();
+    else
+      this->discardLastState();
+
+    return success;
+  }
 
   bool visit(const LiteralExpr& literalExpr) override
   {
